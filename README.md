@@ -1,107 +1,156 @@
-# FeedRule — Custom AI Filter for LinkedIn
+# FeedRule — Custom AI Filter & Second Brain for LinkedIn
 
-A Chrome extension that filters your LinkedIn feed using AI, driven by
-plain-English rules you write yourself (not a fixed list of categories).
-Uses your own OpenAI, Gemini, or Claude API key — or a local LLM (Ollama, LM Studio) — nothing goes through a
-third-party tracking server.
+A privacy-focused Chrome Extension (Manifest V3) that filters your LinkedIn feed using AI driven by plain-English rules, extracts subject-matter topics, curates high-signal posts into a local **Second Brain**, computes visual **Analytics**, and maps relationships in an interactive **Knowledge Graph**.
 
-## Load it in Chrome (dev mode)
+Uses your own API keys (OpenAI, Google Gemini, Anthropic Claude) or local inference (Ollama, LM Studio). **Zero remote telemetry or tracking backends.**
 
-1. Open `chrome://extensions`
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked**
-4. Select this folder (`linkedin-ai-filter/`)
-5. Click the extension icon → **API key & model settings** → configure your provider, key, or local Base URL
-6. Click the extension icon → type your rules, e.g.:
-   > Hide: recruiter spam, humble-brag posts, crypto/finance ads. Keep anything about AI or semiconductors.
-7. Go to linkedin.com and refresh — matching posts collapse with a
-   "Hidden by your filter" placeholder (click "Show anyway" to expand).
-8. Click the extension icon → **View filter dashboard →** to see stats and
-   a searchable log of every post that's been hidden or kept.
+---
 
-## Custom Base URLs & Local Models
+## Features
 
-FeedRule supports custom Base URLs across providers in Settings:
+### 1. Plain-English Feed Filtering & Custom Base URLs
+- **Natural Language Rules**: Write custom filter instructions in plain English (e.g. *"Hide recruiter spam, crypto ads, and humble-brag posts. Keep technical deep dives."*).
+- **Custom Base URLs**:
+  - **Local Inference (Full Privacy)**:
+    - **Ollama**: Base URL `http://localhost:11434/v1`, Model `llama3.2` (API key optional).
+    - **LM Studio**: Base URL `http://localhost:1234/v1`, Model `local-model` (API key optional).
+  - **OpenAI-Compatible Gateways**:
+    - **OpenRouter**: `https://openrouter.ai/api/v1`
+    - **Groq**: `https://api.groq.com/openai/v1`
+    - **DeepSeek**: `https://api.deepseek.com/v1`
+- **Dynamic Host Permissions**: Automatically requests runtime permissions for custom endpoints via Chrome's permission manager.
+- **Fail-Open Architecture**: Any API error, timeout (15s), or invalid response keeps posts visible rather than hiding content.
 
-- **Local Inference (Zero External API Keys / Full Privacy)**:
-  - **Ollama**: Base URL `http://localhost:11434/v1`, Model `llama3.2` (API key can be left empty).
-  - **LM Studio**: Base URL `http://localhost:1234/v1`, Model `your-local-model` (API key can be left empty).
-- **OpenAI-Compatible Gateways**:
-  - **OpenRouter**: Base URL `https://openrouter.ai/api/v1`, Model `anthropic/claude-3.5-sonnet` (or any OpenRouter model).
-  - **Groq**: Base URL `https://api.groq.com/openai/v1`, Model `llama-3.3-70b-versatile`.
-  - **DeepSeek**: Base URL `https://api.deepseek.com/v1`, Model `deepseek-chat`.
+### 2. Subject-Matter Topic Classification
+- Extracts 0–5 concise topic tags (e.g. `AI`, `5G`, `Semiconductors`, `Embedded Systems`) per post during classification.
+- **Strict Normalization**: Syntactically trimmed, case-insensitively deduplicated, and length-capped.
+- **Cache Isolation**: Decision cache v3 is keyed by SHA-256 hash of `[version, provider, model, rulesText, postText]`.
 
-## Dashboard
+### 3. Second Brain (Saved Posts & Export)
+- **Auto-Save Engine**: Define topic rules (e.g. `AI, 5G, Distributed Systems`) to automatically curate matching posts into your local Second Brain.
+- **Manual Curation**: Save or unsave posts directly with full metadata (author, profile URL, permalink, timestamp).
+- **Obsidian & Markdown Export**: Export saved posts as an Obsidian-ready Markdown document with sanitized hashtags (`#Embedded_Systems`) or as structured JSON.
+- **Race-Free Storage**: All writes pass through a promise-serialized mutation queue to prevent data loss.
 
-`src/dashboard/dashboard.html` shows:
-- Total posts seen, hidden, kept, and hide rate
-- A filterable/searchable table of every logged decision (excerpt, reason, time)
-- A "Clear log" button
+### 4. Advanced Analytics & Trend Visualizations
+- **Single-Pass Engine**: $O(N)$ analytics layer computing KPIs, daily/weekly activity buckets, and topic performance.
+- **Local Calendar Date Boundaries**: Aggregates by local calendar dates (`Today`, `Last 7 Days`, `Last 30 Days`, `All Time`).
+- **XSS-Safe SVG Charts**: Pure SVG trend lines (Total Analyzed, Kept, Hidden, Saved) and top topic frequency bars.
+- **Rolling Dataset**: Operates on the rolling retained decision log (capped at the most recent 500 entries).
 
-It reads from a rolling log (`src/storage/log-store.js`) capped at the most
-recent 500 posts, stored in `chrome.storage.local`.
+### 5. Deterministic Knowledge Graph
+- **Structural Network**: Visualizes relationships directly from your Second Brain:
+  - `Saved Post` $\xrightarrow{\text{HAS\_TOPIC}}$ `Topic`
+  - `Saved Post` $\xrightarrow{\text{WRITTEN\_BY}}$ `Author`
+- **Hardware-Accelerated HTML5 Canvas**: 60fps rendering with smooth pan, zoom ($0.2\times$ to $4.0\times$), node dragging, and neighborhood highlight on hover.
+- **Zero-Dependency Force Simulation**: Physics layout (Coulomb repulsion, Hooke spring attraction, center gravity) with automatic alpha cooldown.
+- **Interactive Detail Sidebar**: Click any node to view full post details, author post lists, or topic post lists with instant links to LinkedIn.
 
-## How it works
+---
 
-1. `src/content/content-index.js` watches the feed with a `MutationObserver`
-   and extracts post text as it renders.
-2. Posts are batched and sent via `chrome.runtime.sendMessage` to
-   `src/background/service-worker.js`.
-3. The service worker checks a local decision cache (keyed by a hash of
-   rules+post text) — repeat views don't re-call the API.
-4. Uncached posts go to your chosen provider (`src/llm/*-provider.js`),
-   which classifies each post as hide/keep against your rules.
-5. The content script applies the decision to the DOM.
+## Privacy & Data Flow Architecture
 
-**Fails open everywhere**: missing key on authenticated endpoints, API error, unparseable response,
-or daily cap reached → posts stay visible rather than being hidden.
+FeedRule is designed with strict client-side data boundaries:
 
-## Project structure
+```
++---------------------------------------------------------------------------------------+
+| User Device (Local Chrome Storage)                                                   |
+|   - API Keys: Stored exclusively in chrome.storage.local (never synced to cloud)     |
+|   - Decision Log: Retained locally (capped at 500 rolling entries)                    |
+|   - Second Brain: Stored locally in chrome.storage.local (4,000 char cap per post)    |
+|   - Metadata: Author names, profile URLs, and permalinks remain 100% local            |
++-------------------------------------------+-------------------------------------------+
+                                            |
+                                            | Outbound HTTP POST (Only when classifying)
+                                            v
++---------------------------------------------------------------------------------------+
+| Configured LLM Endpoint (OpenAI / Gemini / Claude / Custom Base URL / Local LLM)      |
+|   - Transmitted Payload: Post ID + Post Text snippet (first 1,200 chars only)         |
+|   - Author names, profile URLs, and post permalinks are NEVER sent to the LLM         |
+|   - Local LLMs (Ollama / LM Studio): Zero outbound network traffic                    |
++---------------------------------------------------------------------------------------+
+```
+
+---
+
+## Installation (Unpacked Extension)
+
+1. Clone or download this repository:
+   ```bash
+   git clone https://github.com/your-username/linkedin-ai-filter.git
+   ```
+2. Open Chrome and navigate to `chrome://extensions`.
+3. Enable **Developer mode** in the top-right corner.
+4. Click **Load unpacked** and select the `linkedin-ai-filter/` root directory.
+5. Click the extension icon $\rightarrow$ **API key & provider settings** to select your provider, enter your API key, or set a custom Base URL.
+6. Configure your filter and save rules in the extension popup.
+7. Open [LinkedIn](https://www.linkedin.com/feed/) — filtered posts will collapse with a placeholder and a *"Show anyway"* toggle.
+
+---
+
+## Project Structure
 
 ```
 linkedin-ai-filter/
-├── manifest.json
-├── icons/
-├── test/                      # automated unit test suite
-│   ├── url-helper.test.js
-│   └── providers.test.js
+├── manifest.json              # Manifest V3 configuration (storage permission only)
+├── icons/                     # Extension icon assets (16px, 48px, 128px)
+├── test/                      # Automated unit test suite (node --test)
+│   ├── manifest.test.js       # Manifest V3 permission and match validation
+│   ├── url-helper.test.js     # URL normalization & endpoint resolution
+│   ├── providers.test.js      # Provider adapters & authentication
+│   ├── cache.test.js          # Cache isolation & versioning
+│   ├── normalization.test.js  # Topic normalization & deduplication
+│   ├── save-rules.test.js     # Exact topic match save engine
+│   ├── saved-posts.test.js    # Concurrency, deduplication & invariants
+│   ├── logging.test.js        # Decision log retention & legacy defaults
+│   ├── analytics.test.js      # Single-pass metrics & SVG safety
+│   └── graph.test.js          # Graph builder & force layout physics
 └── src/
     ├── content/
-    │   ├── content-index.js   # feed watcher + DOM filtering (plain script, no bundler needed)
-    │   └── content.css
+    │   ├── content-index.js   # Feed watcher, DOM extractor & filtering
+    │   └── content.css        # Collapsed post placeholder styles
     ├── background/
-    │   └── service-worker.js  # batches, caches, calls the LLM provider
+    │   └── service-worker.js  # Background router, classification & caching
     ├── llm/
-    │   ├── provider-base.js   # shared prompt + response parsing
-    │   ├── url-helper.js      # URL validation, normalization, and endpoint resolution
-    │   ├── factory.js
-    │   ├── openai-provider.js
-    │   ├── gemini-provider.js
-    │   └── claude-provider.js
-    ├── popup/                 # rules editor, on/off toggle
-    ├── options/               # API keys, Base URLs, model choice, daily call cap
-    ├── dashboard/             # stats + searchable log of filtered posts
-    └── storage/
-        ├── rules-store.js     # chrome.storage wrapper + decision cache
-        └── log-store.js       # rolling log of every decision, for the dashboard
+    │   ├── factory.js         # Provider resolver
+    │   ├── provider-base.js   # Topic normalization & JSON response parser
+    │   ├── url-helper.js      # URL validation & endpoint construction
+    │   ├── openai-provider.js # OpenAI & OpenAI-compatible adapter
+    │   ├── gemini-provider.js # Google Gemini structured output adapter
+    │   └── claude-provider.js # Anthropic Claude adapter
+    ├── rules/
+    │   └── save-rule-engine.js# Exact-match topic rule evaluator
+    ├── storage/
+    │   ├── rules-store.js     # Settings & cache persistence
+    │   ├── log-store.js       # Rolling 500 decision log
+    │   └── saved-posts-store.js # Second Brain serialized storage
+    ├── export/
+    │   └── export-helper.js   # Obsidian Markdown & JSON export
+    ├── analytics/
+    │   └── dashboard-analytics.js # Single-pass KPI & time-series engine
+    ├── dashboard/
+    │   ├── dashboard.html     # Analytics & decision log viewer
+    │   ├── dashboard.js       # Dashboard reactive controller
+    │   └── charts.js          # XSS-safe pure SVG chart renderers
+    ├── saved/
+    │   ├── saved.html         # Second Brain post viewer UI
+    │   └── saved.js           # Second Brain controller & exporter
+    ├── graph/
+    │   ├── graph-builder.js   # O(N+E) pure graph model builder
+    │   ├── force-layout.js    # Spring-embedder physics simulation
+    │   ├── graph-renderer.js  # High-DPI interactive Canvas renderer
+    │   ├── graph.html         # Knowledge Graph view
+    │   └── graph.js           # Graph page controller & sidebar
+    ├── popup/                 # Filter toggle & rules editor popup
+    └── options/               # Provider, Base URL & API key settings
 ```
 
-## Known limitations (v1 / MVP)
+---
 
-- LinkedIn's DOM changes often and uses hashed/randomized CSS class names
-  per build, so class selectors are useless. The extension instead relies
-  on semantic markup: `div[data-testid="mainFeed"] div[role="listitem"]`
-  for post containers and `[data-testid="expandable-text-box"]` for post
-  text. If filtering stops working, check `CONTAINER_CANDIDATES` /
-  `TEXT_CANDIDATES` at the top of `content-index.js` first — open a post
-  in DevTools → Elements and see whether these `data-testid`/`role`
-  attributes still exist.
-- Since LinkedIn no longer exposes a stable `data-urn`/`data-id` per post,
-  the extension derives an id from a hash of the post's text. Two posts
-  with byte-identical text will share an id (rare in practice, but a
-  known tradeoff).
-- Social feed only; job listings and other feed types aren't covered yet.
-- No token/cost estimator in the UI yet — the daily call cap in Settings
-  is a basic safety guardrail (call count, not token count).
-- Firefox/Edge: MV3 is supported by both, but this hasn't been tested there
-  yet — expect minor manifest tweaks.
+## Known Limitations
+
+- **Rolling Decision Log**: The filter decision log is capped at the most recent 500 decisions in local storage to prevent unbounded growth.
+- **Feed Scope**: Focuses on the main LinkedIn social feed (`/feed/`); recruiter search, messages, and job listings are not filtered.
+- **Daily Call Cap**: The daily limit in Settings is a request count guardrail (e.g. 500 requests/day), not a token-count meter.
+- **Knowledge Graph Scale**: The zero-dependency spring-embedder calculates pairwise forces at $O(N^2)$, optimized for up to 1,500 nodes.
+- **Platform Support**: Designed and verified for Manifest V3 on Google Chrome and Chromium-based browsers.
