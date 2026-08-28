@@ -18,7 +18,8 @@
     "https://api.groq.com/*",
     "https://api.deepseek.com/*",
     "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
   ],
   "optional_host_permissions": [
     "https://*/*",

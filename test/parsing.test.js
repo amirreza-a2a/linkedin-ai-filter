@@ -16,6 +16,36 @@ test("parseClassificationResponse - parses standard JSON array", () => {
   assert.equal(res[1].hide, false);
 });
 
+test("parseClassificationResponse - strict boolean parsing (no unsafe coercion)", () => {
+  const raw = JSON.stringify([
+    { id: "p1", hide: true, reason: "boolean true" },
+    { id: "p2", hide: false, reason: "boolean false" },
+    { id: "p3", hide: "true", reason: "string true" },
+    { id: "p4", hide: "false", reason: "string false" },
+    { id: "p5", hide: null, reason: "null hide" },
+    { id: "p6", hide: 0, reason: "numeric 0" },
+    { id: "p7", hide: 1, reason: "numeric 1" },
+  ]);
+  const posts = [
+    { id: "p1", text: "t1" },
+    { id: "p2", text: "t2" },
+    { id: "p3", text: "t3" },
+    { id: "p4", text: "t4" },
+    { id: "p5", text: "t5" },
+    { id: "p6", text: "t6" },
+    { id: "p7", text: "t7" },
+  ];
+  const res = parseClassificationResponse(raw, posts);
+
+  assert.equal(res.find((r) => r.id === "p1").hide, true);
+  assert.equal(res.find((r) => r.id === "p2").hide, false);
+  assert.equal(res.find((r) => r.id === "p3").hide, false);
+  assert.equal(res.find((r) => r.id === "p4").hide, false);
+  assert.equal(res.find((r) => r.id === "p5").hide, false);
+  assert.equal(res.find((r) => r.id === "p6").hide, false);
+  assert.equal(res.find((r) => r.id === "p7").hide, false);
+});
+
 test("parseClassificationResponse - strips DeepSeek R1 <think> blocks and markdown fences", () => {
   const raw = `<think>
 I need to classify these posts based on user rules.

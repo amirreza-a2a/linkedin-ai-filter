@@ -78,7 +78,7 @@ export function parseClassificationResponse(rawText, posts) {
   return posts.map((p) => {
     const r = byId.get(String(p.id));
     return r
-      ? { id: p.id, hide: Boolean(r.hide), reason: r.reason || "" }
+      ? { id: p.id, hide: r.hide === true, reason: r.reason || "" }
       : { id: p.id, hide: false, reason: "missing-fail-open" };
   });
 }

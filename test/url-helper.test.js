@@ -53,6 +53,10 @@ test("validateAndNormalizeBaseUrl - localhost, 127.0.0.1, and IPv6", () => {
     validateAndNormalizeBaseUrl("http://[::1]:11434/v1"),
     "http://[::1]:11434/v1"
   );
+  assert.equal(
+    validateAndNormalizeBaseUrl("http://[2001:db8::1]:8080/v1"),
+    "http://[2001:db8::1]:8080/v1"
+  );
 });
 
 test("validateAndNormalizeBaseUrl - rejects non-http/https protocols", () => {
@@ -93,7 +97,7 @@ test("validateAndNormalizeBaseUrl - rejects malformed strings", () => {
   });
 });
 
-test("getRequiredOriginPattern - extracts match pattern for Chrome permissions", () => {
+test("getRequiredOriginPattern - extracts exact match pattern for Chrome permissions", () => {
   assert.equal(getRequiredOriginPattern(""), "");
   assert.equal(
     getRequiredOriginPattern("https://openrouter.ai/api/v1"),
@@ -109,11 +113,15 @@ test("getRequiredOriginPattern - extracts match pattern for Chrome permissions",
   );
   assert.equal(
     getRequiredOriginPattern("http://127.0.0.1:1234/v1"),
-    "http://localhost/*"
+    "http://127.0.0.1/*"
   );
   assert.equal(
     getRequiredOriginPattern("http://[::1]:11434/v1"),
-    "http://localhost/*"
+    "http://[::1]/*"
+  );
+  assert.equal(
+    getRequiredOriginPattern("http://[2001:db8::1]:8080/v1"),
+    "http://[2001:db8::1]/*"
   );
 });
 

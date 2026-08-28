@@ -166,14 +166,26 @@
     if (isProcessingQueue || batchQueue.length === 0) return;
     isProcessingQueue = true;
 
-    while (batchQueue.length > 0) {
-      const nextBatch = batchQueue.shift();
-      await new Promise((resolve) => {
-        sendBatchMessage(nextBatch, resolve);
-      });
+    try {
+      while (batchQueue.length > 0) {
+        const nextBatch = batchQueue.shift();
+        await new Promise((resolve) => {
+          try {
+            sendBatchMessage(nextBatch, resolve);
+          } catch (sendErr) {
+            console.error("[FeedRule] sendBatchMessage failed:", sendErr);
+            resolve();
+          }
+        });
+      }
+    } catch (err) {
+      console.error("[FeedRule] unexpected error in processQueue:", err);
+    } finally {
+      isProcessingQueue = false;
+      if (batchQueue.length > 0) {
+        setTimeout(processQueue, 0);
+      }
     }
-
-    isProcessingQueue = false;
   }
 
   function flush() {

@@ -38,18 +38,16 @@ export function validateAndNormalizeBaseUrl(inputUrl) {
 /**
  * Extracts the Chrome extension match pattern for host permissions from a URL.
  * Chrome match pattern syntax: <scheme>://<host>/* (ports are omitted in match patterns).
+ * Preserves the actual host (e.g. domain, localhost, 127.0.0.1, [::1], [2001:db8::1]).
  *
  * @param {string} urlStr
- * @returns {string} Match pattern, e.g. "https://api.groq.com/*" or "http://localhost/*"
+ * @returns {string} Match pattern, e.g. "https://api.groq.com/*", "http://localhost/*", "http://[::1]/*"
  */
 export function getRequiredOriginPattern(urlStr) {
   if (!urlStr || !urlStr.trim()) return "";
   const normalized = validateAndNormalizeBaseUrl(urlStr);
   if (!normalized) return "";
   const parsed = new URL(normalized);
-  if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname.includes(":")) {
-    return `${parsed.protocol}//localhost/*`;
-  }
   return `${parsed.protocol}//${parsed.hostname}/*`;
 }
 
