@@ -58,9 +58,13 @@ function renderNodeDetails(node) {
   if (node.type === "post") {
     const p = node.data || {};
     const dateStr = p.savedAt ? new Date(p.savedAt).toLocaleString() : "Unknown";
+    const authorDisplayName = p.author
+      ? escapeXml(p.author)
+      : `<span style="color:#94a3b8; font-style:italic;">Author unavailable</span>`;
+
     const authorLink = p.authorUrl
-      ? `<a class="link" href="${escapeXml(p.authorUrl)}" target="_blank" rel="noopener">${escapeXml(p.author || "LinkedIn Author")}</a>`
-      : escapeXml(p.author || "LinkedIn Author");
+      ? `<a class="link" href="${escapeXml(p.authorUrl)}" target="_blank" rel="noopener">${authorDisplayName}</a>`
+      : authorDisplayName;
 
     const postLink = p.postUrl
       ? `<p><a class="link" href="${escapeXml(p.postUrl)}" target="_blank" rel="noopener">Open Original on LinkedIn ↗</a></p>`
@@ -102,7 +106,7 @@ function renderNodeDetails(node) {
         const textExcerpt = (p.text || "").slice(0, 100);
         return `
           <div class="connected-item" data-post-id="${escapeXml(p.id)}">
-            <div style="font-weight:600; color:#334155; margin-bottom:2px;">${escapeXml(p.author || "LinkedIn Author")}</div>
+            <div style="font-weight:600; color:#334155; margin-bottom:2px;">${escapeXml(p.author || "Author unavailable")}</div>
             <div style="color:#64748b;">${escapeXml(textExcerpt)}${textExcerpt.length >= 100 ? "…" : ""}</div>
           </div>
         `;

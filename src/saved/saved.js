@@ -53,9 +53,13 @@ function renderPosts(posts) {
   postsList.innerHTML = posts
     .map((p) => {
       const dateStr = p.savedAt ? new Date(p.savedAt).toLocaleString() : "";
+      const authorDisplayName = p.author
+        ? escapeHtml(p.author)
+        : `<span style="color:#94a3b8; font-style:italic;">Author unavailable</span>`;
+
       const authorHtml = p.authorUrl
-        ? `<a class="author-name" href="${escapeHtml(p.authorUrl)}" target="_blank" rel="noopener">${escapeHtml(p.author || "LinkedIn Author")}</a>`
-        : `<span class="author-name">${escapeHtml(p.author || "LinkedIn Author")}</span>`;
+        ? `<a class="author-name" href="${escapeHtml(p.authorUrl)}" target="_blank" rel="noopener">${authorDisplayName}</a>`
+        : `<span class="author-name">${authorDisplayName}</span>`;
 
       const linkHtml = p.postUrl
         ? `<a class="permalink" href="${escapeHtml(p.postUrl)}" target="_blank" rel="noopener">Open on LinkedIn ↗</a>`

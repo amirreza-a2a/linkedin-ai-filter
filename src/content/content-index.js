@@ -22,17 +22,6 @@
     ".update-components-text",
     ".feed-shared-text",
   ];
-  const ACTOR_NAME_CANDIDATES = [
-    ".update-components-actor__name",
-    ".feed-shared-actor__name",
-    "span.update-components-actor__title span[dir='ltr']",
-    ".update-components-actor__title",
-  ];
-  const ACTOR_LINK_CANDIDATES = [
-    "a.update-components-actor__image",
-    "a.app-aware-link[href*='/in/']",
-    "a.feed-shared-actor__container-link",
-  ];
   const POST_LINK_CANDIDATES = [
     "a.update-components-actor__sub-description-link[href*='/feed/update/']",
     "a.update-components-actor__sub-description-link[href*='/posts/']",
@@ -43,6 +32,149 @@
     "a.app-aware-link[href*='/feed/update/']",
     "a.app-aware-link[href*='/posts/']",
   ];
+
+  const VALID_AUTHOR_PATH_REGEX = /\/(in|company|school|showcase)\/[a-zA-Z0-9_\-%]+/i;
+  const INVALID_AUTHOR_PATH_REGEX = /\/(feed\/update|posts|messaging|jobs|notifications)\b/i;
+
+  function sanitizeUrl(rawUrl) {
+    if (typeof rawUrl !== "string" || !rawUrl.trim()) return "";
+    try {
+      const parsed = new URL(rawUrl.trim());
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
+      const host = parsed.host.toLowerCase().replace(/^www\./, "");
+      const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+      return `${parsed.protocol}//${host}${pathname === "/" ? "" : pathname}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function isValidAuthorUrl(url) {
+    if (typeof url !== "string" || !url.trim()) return false;
+    if (INVALID_AUTHOR_PATH_REGEX.test(url)) return false;
+    return VALID_AUTHOR_PATH_REGEX.test(url);
+  }
+
+  function cleanAuthorName(rawName) {
+    if (typeof rawName !== "string" || !rawName.trim()) return "";
+    let name = rawName.trim();
+    name = name.replace(/^View\s+(.+?)['’]s\s+(profile|page|company\s+page).*$/i, "$1");
+    name = name.replace(/\s*[•·]\s*(1st|2nd|3rd\+?|Following|You|Premium)\b.*/i, "");
+    name = name.replace(/\s+(reposted|shared|liked|commented\s+on)\s+this.*$/i, "");
+    name = name.replace(/^(Promoted|Suggested\s+for\s+you|Suggested)\b.*/i, "");
+    name = name.split("\n")[0].trim();
+    name = name.replace(/^[•·\s-]+|[•·\s-]+$/g, "").trim();
+    name = name.replace(/\s+/g, " ");
+    return name;
+  }
+
+  function extractAuthorFromDOM(el) {
+    if (!el || typeof el.querySelector !== "function") {
+      return { author: "", authorUrl: "" };
+    }
+
+    const ACTOR_CONTAINER_SELECTORS = [
+      ".update-components-actor",
+      ".feed-shared-actor",
+      "[data-testid='actor-container']",
+      ".feed-shared-actor__container-link",
+    ];
+
+    let actorScope = null;
+    for (const sel of ACTOR_CONTAINER_SELECTORS) {
+      const found = el.querySelector(sel);
+      if (found) {
+        actorScope = found;
+        break;
+      }
+    }
+
+    const searchRoot = actorScope || el;
+
+    const PROFILE_LINK_SELECTORS = [
+      "a.update-components-actor__image[href]",
+      "a.feed-shared-actor__container-link[href]",
+      "a.update-components-actor__container-link[href]",
+      "a.app-aware-link[href*='/in/']",
+      "a.app-aware-link[href*='/company/']",
+      "a.app-aware-link[href*='/school/']",
+      "a.app-aware-link[href*='/showcase/']",
+      "a[href*='/in/']",
+      "a[href*='/company/']",
+      "a[href*='/school/']",
+      "a[href*='/showcase/']",
+    ];
+
+    let profileAnchor = null;
+    for (const sel of PROFILE_LINK_SELECTORS) {
+      const anchors = Array.from(searchRoot.querySelectorAll(sel));
+      for (const a of anchors) {
+        if (a.closest?.(".update-components-header") || a.closest?.(".feed-shared-header")) {
+          continue;
+        }
+        const rawHref = a.getAttribute("href") || a.href || "";
+        if (isValidAuthorUrl(rawHref)) {
+          profileAnchor = a;
+          break;
+        }
+      }
+      if (profileAnchor) break;
+    }
+
+    let rawAuthor = "";
+    let authorUrl = "";
+
+    if (profileAnchor) {
+      const rawHref = profileAnchor.getAttribute("href") || profileAnchor.href || "";
+      const sanitized = sanitizeUrl(rawHref);
+      if (isValidAuthorUrl(sanitized)) {
+        authorUrl = sanitized;
+      }
+
+      const ariaLabel = profileAnchor.getAttribute("aria-label");
+      if (ariaLabel && cleanAuthorName(ariaLabel)) {
+        rawAuthor = ariaLabel;
+      }
+
+      if (!rawAuthor) {
+        const nameEl =
+          profileAnchor.querySelector(".update-components-actor__name, .feed-shared-actor__name, span[dir='ltr']") ||
+          searchRoot.querySelector(".update-components-actor__name, .feed-shared-actor__name, span[dir='ltr']");
+        if (nameEl?.innerText?.trim()) {
+          rawAuthor = nameEl.innerText.trim();
+        } else if (nameEl?.textContent?.trim()) {
+          rawAuthor = nameEl.textContent.trim();
+        }
+      }
+
+      if (!rawAuthor && profileAnchor.textContent?.trim()) {
+        rawAuthor = profileAnchor.textContent.trim();
+      }
+
+      if (!rawAuthor) {
+        const img = profileAnchor.querySelector("img[alt]");
+        if (img?.getAttribute("alt")?.trim()) {
+          rawAuthor = img.getAttribute("alt").trim();
+        }
+      }
+    }
+
+    if (!rawAuthor) {
+      const nameEl = searchRoot.querySelector(
+        ".update-components-actor__name, .feed-shared-actor__name, span.update-components-actor__title span[dir='ltr']"
+      );
+      if (nameEl && !nameEl.closest?.(".update-components-header") && !nameEl.closest?.(".feed-shared-header")) {
+        rawAuthor = (nameEl.innerText || nameEl.textContent || "").trim();
+      }
+    }
+
+    return {
+      author: cleanAuthorName(rawAuthor),
+      authorUrl: authorUrl,
+    };
+  }
 
   let activeContainerSelector = null;
 
@@ -88,27 +220,10 @@
       return null; // ads/empty spacers etc.
     }
 
-    // 1. Author Name
-    let author = "";
-    for (const sel of ACTOR_NAME_CANDIDATES) {
-      const authorEl = el.querySelector(sel);
-      if (authorEl?.innerText?.trim()) {
-        author = authorEl.innerText.trim().split("\n")[0].trim();
-        break;
-      }
-    }
+    // 1. Coupled Author & Author Profile URL Extraction
+    const { author, authorUrl } = extractAuthorFromDOM(el);
 
-    // 2. Author Profile URL
-    let authorUrl = "";
-    for (const sel of ACTOR_LINK_CANDIDATES) {
-      const linkEl = el.querySelector(sel);
-      if (linkEl?.href) {
-        authorUrl = linkEl.href.split("?")[0];
-        break;
-      }
-    }
-
-    // 3. Post Permalink (Direct Header / Timestamp anchor)
+    // 2. Post Permalink (Direct Header / Timestamp anchor)
     let postUrl = "";
     for (const sel of POST_LINK_CANDIDATES) {
       const linkEl = el.querySelector(sel);
@@ -118,7 +233,7 @@
       }
     }
 
-    // 4. Stable 3-level Post ID Strategy
+    // 3. Stable 3-level Post ID Strategy
     // Level 1: Direct activity or UGC URN attribute on container or children
     let id =
       el.getAttribute("data-urn") ||
