@@ -12,6 +12,10 @@ const RESPONSE_SCHEMA = {
       id: { type: "STRING" },
       hide: { type: "BOOLEAN" },
       reason: { type: "STRING" },
+      topics: {
+        type: "ARRAY",
+        items: { type: "STRING" },
+      },
     },
     required: ["id", "hide"],
   },

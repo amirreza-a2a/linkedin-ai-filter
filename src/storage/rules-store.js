@@ -19,7 +19,7 @@ const DEFAULTS = {
   dailyCallCap: 500, // safety guardrail, requests not tokens
 };
 
-export const CACHE_VERSION = 2;
+export const CACHE_VERSION = 3;
 
 export async function buildCacheKey({
   version = CACHE_VERSION,
@@ -84,7 +84,7 @@ export async function setSettings(partial) {
   }
 }
 
-// --- Decision cache: hash(version + provider + model + rulesText + postText) -> {hide, reason, ts} ---
+// --- Decision cache: hash(version + provider + model + rulesText + postText) -> {hide, reason, topics, ts} ---
 // Avoids re-billing the API when the same post scrolls back into view under identical configuration.
 
 export async function getCachedDecision(hash) {

@@ -14,8 +14,9 @@ export async function appendLogEntries(entries) {
     log[entry.id] = {
       id: entry.id,
       textSnippet: entry.textSnippet,
-      hide: entry.hide,
-      reason: entry.reason,
+      hide: entry.hide === true,
+      reason: typeof entry.reason === "string" ? entry.reason : "",
+      topics: Array.isArray(entry.topics) ? entry.topics : [],
       provider: entry.provider,
       rulesText: entry.rulesText,
       ts: entry.ts || Date.now(),
@@ -36,7 +37,14 @@ export async function appendLogEntry(entry) {
 
 export async function getLogEntries() {
   const { [LOG_KEY]: log = {} } = await chrome.storage.local.get([LOG_KEY]);
-  return Object.values(log).sort((a, b) => b.ts - a.ts);
+  return Object.values(log)
+    .sort((a, b) => b.ts - a.ts)
+    .map((e) => ({
+      ...e,
+      hide: e.hide === true,
+      reason: e.reason || "",
+      topics: Array.isArray(e.topics) ? e.topics : [],
+    }));
 }
 
 export async function clearLog() {

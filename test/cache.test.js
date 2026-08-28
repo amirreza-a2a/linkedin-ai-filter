@@ -82,7 +82,9 @@ test("Cache Key Isolation - 4. Same post + different rules -> cache miss", async
   assert.notEqual(rule1Key, rule2Key);
 });
 
-test("Cache Key Isolation - 5. Classification schema/version change -> cache miss", async () => {
+test("Cache Key Isolation - 5. CACHE_VERSION bump from 2 to 3 invalidates old cache entries", async () => {
+  assert.equal(CACHE_VERSION, 3);
+
   const v2Key = await buildCacheKey({
     version: 2,
     provider: "openai",

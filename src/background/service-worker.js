@@ -29,7 +29,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: false,
           error: String(err),
-          results: posts.map((p) => ({ id: p.id, hide: false, reason: "error-fail-open" })),
+          results: posts.map((p) => ({ id: p.id, hide: false, reason: "error-fail-open", topics: [] })),
         });
       } catch (sendErr) {
         console.warn("[FeedRule] sendResponse catch failed:", sendErr);
@@ -48,8 +48,9 @@ async function logResults(posts, results, provider, rulesText) {
     entries.push({
       id: r.id,
       textSnippet: post.text.slice(0, 200),
-      hide: r.hide,
-      reason: r.reason,
+      hide: r.hide === true,
+      reason: r.reason || "",
+      topics: Array.isArray(r.topics) ? r.topics : [],
       provider,
       rulesText,
     });
@@ -63,7 +64,7 @@ async function handleClassify(posts) {
   const settings = await getSettings();
 
   if (!settings.enabled || !settings.rulesText?.trim()) {
-    const results = posts.map((p) => ({ id: p.id, hide: false, reason: "disabled-or-no-rules" }));
+    const results = posts.map((p) => ({ id: p.id, hide: false, reason: "disabled-or-no-rules", topics: [] }));
     await logResults(posts, results, settings.provider, settings.rulesText);
     return results;
   }
@@ -93,7 +94,12 @@ async function handleClassify(posts) {
   for (let i = 0; i < posts.length; i++) {
     const cached = cachedMap[hashes[i]];
     if (cached) {
-      results[i] = { id: posts[i].id, hide: cached.hide, reason: cached.reason };
+      results[i] = {
+        id: posts[i].id,
+        hide: cached.hide === true,
+        reason: cached.reason || "",
+        topics: Array.isArray(cached.topics) ? cached.topics : [],
+      };
     } else {
       uncached.push({ index: i, post: posts[i], hash: hashes[i] });
     }
@@ -107,7 +113,7 @@ async function handleClassify(posts) {
   const withinCap = await incrementAndCheckDailyCap(settings.dailyCallCap);
   if (!withinCap) {
     uncached.forEach(({ index, post }) => {
-      results[index] = { id: post.id, hide: false, reason: "daily-cap-reached" };
+      results[index] = { id: post.id, hide: false, reason: "daily-cap-reached", topics: [] };
     });
     await logResults(posts, results, settings.provider, settings.rulesText);
     return results;
@@ -128,9 +134,19 @@ async function handleClassify(posts) {
   const toCache = {};
 
   for (const { index, post, hash } of uncached) {
-    const r = byId.get(String(post.id)) || { hide: false, reason: "missing" };
-    results[index] = { id: post.id, hide: r.hide, reason: r.reason };
-    toCache[hash] = { hide: r.hide, reason: r.reason };
+    const r = byId.get(String(post.id)) || { hide: false, reason: "missing", topics: [] };
+    const decision = {
+      id: post.id,
+      hide: r.hide === true,
+      reason: typeof r.reason === "string" ? r.reason : "",
+      topics: Array.isArray(r.topics) ? r.topics : [],
+    };
+    results[index] = decision;
+    toCache[hash] = {
+      hide: decision.hide,
+      reason: decision.reason,
+      topics: decision.topics,
+    };
   }
 
   await setCachedDecisions(toCache);

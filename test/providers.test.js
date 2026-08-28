@@ -4,7 +4,7 @@ import { classifyBatch as openaiClassify } from "../src/llm/openai-provider.js";
 import { classifyBatch as geminiClassify } from "../src/llm/gemini-provider.js";
 import { classifyBatch as claudeClassify } from "../src/llm/claude-provider.js";
 
-test("OpenAI Provider - sends Authorization header when apiKey is present", async () => {
+test("OpenAI Provider - sends Authorization header and returns topics", async () => {
   let capturedUrl = null;
   let capturedHeaders = null;
   let capturedBody = null;
@@ -20,7 +20,9 @@ test("OpenAI Provider - sends Authorization header when apiKey is present", asyn
         choices: [
           {
             message: {
-              content: JSON.stringify([{ id: "post-1", hide: true, reason: "spam" }]),
+              content: JSON.stringify([
+                { id: "post-1", hide: true, reason: "spam", topics: ["Crypto", "Finance"] },
+              ]),
             },
           },
         ],
@@ -43,6 +45,7 @@ test("OpenAI Provider - sends Authorization header when apiKey is present", asyn
     assert.equal(result.length, 1);
     assert.equal(result[0].hide, true);
     assert.equal(result[0].reason, "spam");
+    assert.deepEqual(result[0].topics, ["Crypto", "Finance"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -62,7 +65,9 @@ test("OpenAI Provider - OMITS Authorization header when apiKey is absent or empt
         choices: [
           {
             message: {
-              content: JSON.stringify([{ id: "post-1", hide: false, reason: "ok" }]),
+              content: JSON.stringify([
+                { id: "post-1", hide: false, reason: "ok", topics: ["Open Source"] },
+              ]),
             },
           },
         ],
@@ -83,26 +88,35 @@ test("OpenAI Provider - OMITS Authorization header when apiKey is absent or empt
     assert.equal(capturedHeaders["Authorization"], undefined);
     assert.equal(result.length, 1);
     assert.equal(result[0].hide, false);
+    assert.deepEqual(result[0].topics, ["Open Source"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("Gemini Provider - headers and empty apiKey handling", async () => {
+test("Gemini Provider - headers, schema, and topic preservation", async () => {
   let capturedHeaders = null;
   let capturedUrl = null;
+  let capturedBody = null;
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     capturedUrl = url;
     capturedHeaders = options.headers;
+    capturedBody = JSON.parse(options.body);
     return {
       ok: true,
       json: async () => ({
         candidates: [
           {
             content: {
-              parts: [{ text: JSON.stringify([{ id: "p1", hide: false, reason: "keep" }]) }],
+              parts: [
+                {
+                  text: JSON.stringify([
+                    { id: "p1", hide: false, reason: "keep", topics: ["AI", "Hardware"] },
+                  ]),
+                },
+              ],
             },
           },
         ],
@@ -112,7 +126,7 @@ test("Gemini Provider - headers and empty apiKey handling", async () => {
 
   try {
     // 1. With API key
-    await geminiClassify({
+    const res1 = await geminiClassify({
       apiKey: "AI-test-key",
       model: "gemini-3.5-flash",
       baseUrl: "",
@@ -124,9 +138,11 @@ test("Gemini Provider - headers and empty apiKey handling", async () => {
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
     );
     assert.equal(capturedHeaders["x-goog-api-key"], "AI-test-key");
+    assert.deepEqual(res1[0].topics, ["AI", "Hardware"]);
+    assert.ok(capturedBody.generationConfig.responseSchema.items.properties.topics);
 
     // 2. Without API key
-    await geminiClassify({
+    const res2 = await geminiClassify({
       apiKey: "",
       model: "gemini-3.5-flash",
       baseUrl: "https://custom-gemini-proxy.com",
@@ -138,12 +154,13 @@ test("Gemini Provider - headers and empty apiKey handling", async () => {
       "https://custom-gemini-proxy.com/v1beta/models/gemini-3.5-flash:generateContent"
     );
     assert.equal(capturedHeaders["x-goog-api-key"], undefined);
+    assert.deepEqual(res2[0].topics, ["AI", "Hardware"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("Claude Provider - headers and empty apiKey handling", async () => {
+test("Claude Provider - headers, authentication, and topic preservation", async () => {
   let capturedHeaders = null;
   let capturedUrl = null;
 
@@ -154,14 +171,21 @@ test("Claude Provider - headers and empty apiKey handling", async () => {
     return {
       ok: true,
       json: async () => ({
-        content: [{ type: "text", text: JSON.stringify([{ id: "p1", hide: false, reason: "ok" }]) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify([
+              { id: "p1", hide: false, reason: "ok", topics: ["Cloud", "DevOps"] },
+            ]),
+          },
+        ],
       }),
     };
   };
 
   try {
     // 1. With API key
-    await claudeClassify({
+    const res1 = await claudeClassify({
       apiKey: "sk-ant-test",
       model: "claude-haiku-4-5-20251001",
       baseUrl: "",
@@ -171,9 +195,10 @@ test("Claude Provider - headers and empty apiKey handling", async () => {
     assert.equal(capturedUrl, "https://api.anthropic.com/v1/messages");
     assert.equal(capturedHeaders["x-api-key"], "sk-ant-test");
     assert.equal(capturedHeaders["anthropic-dangerous-direct-browser-access"], "true");
+    assert.deepEqual(res1[0].topics, ["Cloud", "DevOps"]);
 
     // 2. Without API key
-    await claudeClassify({
+    const res2 = await claudeClassify({
       apiKey: "",
       model: "claude-haiku-4-5-20251001",
       baseUrl: "https://my-claude-proxy.com",
@@ -182,6 +207,7 @@ test("Claude Provider - headers and empty apiKey handling", async () => {
     });
     assert.equal(capturedUrl, "https://my-claude-proxy.com/v1/messages");
     assert.equal(capturedHeaders["x-api-key"], undefined);
+    assert.deepEqual(res2[0].topics, ["Cloud", "DevOps"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -193,7 +219,6 @@ test("Storage Backward Compatibility - mock chrome.storage", async () => {
     rulesText: "sample rules",
     provider: "openai",
     model: { openai: "gpt-4o" },
-    // Notice: baseUrl is NOT present in legacy storage
     dailyCallCap: 300,
   };
   const localStore = {
