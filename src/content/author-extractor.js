@@ -1,11 +1,37 @@
 // src/content/author-extractor.js
-// Dedicated, coupled author identity extractor for LinkedIn posts.
+// Ranked candidate-selection author identity extractor for LinkedIn posts.
 // Supports personal (/in/), company (/company/), school (/school/), and showcase (/showcase/) profiles.
 
 import { sanitizeUrl } from "../storage/saved-posts-store.js";
 
 const VALID_AUTHOR_PATH_REGEX = /\/(in|company|school|showcase)\/[a-zA-Z0-9_\-%]+/i;
 const INVALID_AUTHOR_PATH_REGEX = /\/(feed\/update|posts|messaging|jobs|notifications)\b/i;
+
+const SOCIAL_CONTEXT_PATTERNS = [
+  /\blikes\s+this\b/i,
+  /\bliked\s+this\b/i,
+  /\bcommented\s+on\s+this\b/i,
+  /\breposted\s+this\b/i,
+  /\bshared\s+this\b/i,
+  /\bfollows\s+this\b/i,
+  /\bpromoted\b/i,
+  /\bsuggested\b/i,
+];
+
+const DISQUALIFIED_CONTAINER_SELECTORS = [
+  ".update-components-header",
+  ".feed-shared-header",
+  ".feed-shared-update-v2__header",
+  ".update-components-social-activity",
+  "[data-testid*='social-activity']",
+  ".comments-comments-list",
+  ".comments-comment-item",
+  ".comments-post-meta",
+  ".feed-shared-social-actions",
+  ".feed-shared-social-action-bar",
+  ".social-details-reactors-facepile",
+  ".artdeco-button",
+];
 
 /**
  * Verifies that a URL points to a legitimate LinkedIn actor identity destination.
@@ -44,7 +70,7 @@ export function cleanAuthorName(rawName) {
   name = name.replace(/\s*[•·]\s*(1st|2nd|3rd\+?|Following|You|Premium)\b.*/i, "");
 
   // 4. Remove social context phrases (reposted this, liked this, Promoted, Suggested)
-  name = name.replace(/\s+(reposted|shared|liked|commented\s+on)\s+this.*$/i, "");
+  name = name.replace(/\s+(reposted|shared|liked|commented\s+on|likes|follows)\s+this.*$/i, "");
   name = name.replace(/^(Promoted|Suggested\s+for\s+you|Suggested)\b.*/i, "");
 
   // 5. Clean extra bullet artifacts and whitespace
@@ -55,7 +81,64 @@ export function cleanAuthorName(rawName) {
 }
 
 /**
- * Extracts coupled author name and canonical author profile URL from a post DOM container.
+ * Checks if an element is part of a secondary or social-context region (liker, resharer header, comments, etc.).
+ *
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function isDisqualifiedElement(el) {
+  if (!el) return true;
+
+  // 1. Check parent hierarchy for disqualified container classes
+  for (const sel of DISQUALIFIED_CONTAINER_SELECTORS) {
+    if (el.closest?.(sel)) return true;
+  }
+
+  // 2. Check surrounding text for social context indicators ("likes this", "commented on this")
+  const parentText = (el.parentElement?.textContent || "").toLowerCase();
+  for (const pattern of SOCIAL_CONTEXT_PATTERNS) {
+    if (pattern.test(parentText)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extracts explicit post author metadata from container accessibility labels if present.
+ * e.g., aria-label="Feed post by Armin Daraei" or aria-label="Post by Alice"
+ *
+ * @param {Element} root
+ * @returns {string} Clean author name from metadata or ""
+ */
+function extractExplicitAuthorMetadata(root) {
+  if (!root || typeof root.getAttribute !== "function") return "";
+
+  const ariaLabels = [];
+  const rootAria = root.getAttribute("aria-label");
+  if (rootAria) ariaLabels.push(rootAria);
+
+  if (typeof root.querySelectorAll === "function") {
+    const labelled = root.querySelectorAll("[aria-label*='post by '], [aria-label*='Post by '], [aria-label*='update by '], [aria-label*='Update by ']");
+    for (const l of labelled) {
+      const a = l.getAttribute("aria-label");
+      if (a) ariaLabels.push(a);
+    }
+  }
+
+  for (const label of ariaLabels) {
+    const match = label.match(/(?:Feed\s+)?(?:post|update)\s+by\s+([^,.;\n]+)/i);
+    if (match && match[1]) {
+      const clean = cleanAuthorName(match[1]);
+      if (clean) return clean;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Extracts coupled author name and canonical author profile URL from a post DOM container
+ * using a ranked candidate-selection pipeline.
  *
  * @param {Element|Object} el - Post container element
  * @param {Function} [sanitizeUrlFn=sanitizeUrl] - Canonical URL sanitization function
@@ -66,26 +149,10 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
     return { author: "", authorUrl: "" };
   }
 
-  // 1. Scope query to the primary actor region if present (excluding social context headers)
-  const ACTOR_CONTAINER_SELECTORS = [
-    ".update-components-actor",
-    ".feed-shared-actor",
-    "[data-testid='actor-container']",
-    ".feed-shared-actor__container-link",
-  ];
+  // 1. Extract explicit metadata signal if present
+  const explicitAuthorName = extractExplicitAuthorMetadata(el);
 
-  let actorScope = null;
-  for (const sel of ACTOR_CONTAINER_SELECTORS) {
-    const found = el.querySelector(sel);
-    if (found) {
-      actorScope = found;
-      break;
-    }
-  }
-
-  const searchRoot = actorScope || el;
-
-  // 2. Locate the primary identity anchor <a>
+  // 2. Locate and rank all candidate profile anchors in the post
   const PROFILE_LINK_SELECTORS = [
     "a.update-components-actor__image[href]",
     "a.feed-shared-actor__container-link[href]",
@@ -100,49 +167,100 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
     "a[href*='/showcase/']",
   ];
 
-  let profileAnchor = null;
+  const candidateAnchors = [];
+  const seenUrls = new Set();
+
   for (const sel of PROFILE_LINK_SELECTORS) {
-    const anchors = Array.from(searchRoot.querySelectorAll(sel));
-    for (const a of anchors) {
-      // Exclude social header links (e.g. "Jane Doe reposted this" in .update-components-header)
-      if (a.closest?.(".update-components-header") || a.closest?.(".feed-shared-header")) {
-        continue;
-      }
+    const matches = Array.from(el.querySelectorAll(sel));
+    for (const a of matches) {
       const rawHref = a.getAttribute("href") || a.href || "";
-      if (isValidAuthorUrl(rawHref)) {
-        profileAnchor = a;
-        break;
+      if (!isValidAuthorUrl(rawHref)) continue;
+
+      const sanitizedHref = sanitizeUrlFn(rawHref);
+      if (!isValidAuthorUrl(sanitizedHref)) continue;
+
+      if (seenUrls.has(sanitizedHref)) continue;
+      seenUrls.add(sanitizedHref);
+
+      // Check disqualification
+      if (isDisqualifiedElement(a)) continue;
+
+      // Score this candidate
+      let score = 10; // Base score for valid profile link outside disqualified containers
+
+      const inActorContainer = Boolean(
+        a.closest?.(".update-components-actor") ||
+        a.closest?.(".feed-shared-actor") ||
+        a.closest?.("[data-testid='actor-container']")
+      );
+      if (inActorContainer) score += 100;
+
+      const inActorMeta = Boolean(
+        a.closest?.(".update-components-actor__meta") ||
+        a.closest?.(".update-components-actor__title") ||
+        a.closest?.(".feed-shared-actor__title") ||
+        a.closest?.(".update-components-actor__container")
+      );
+      if (inActorMeta) score += 50;
+
+      if (a.classList?.contains?.("update-components-actor__image") || a.classList?.contains?.("feed-shared-actor__container-link")) {
+        score += 40;
       }
+
+      // Check for explicit name match
+      const ariaLabel = a.getAttribute("aria-label") || "";
+      const text = a.textContent || "";
+      const cleanAria = cleanAuthorName(ariaLabel);
+      const cleanText = cleanAuthorName(text);
+
+      if (explicitAuthorName) {
+        if (cleanAria.toLowerCase() === explicitAuthorName.toLowerCase() || cleanText.toLowerCase() === explicitAuthorName.toLowerCase()) {
+          score += 200;
+        }
+      }
+
+      if (cleanAria || cleanText) score += 20;
+
+      candidateAnchors.push({
+        anchor: a,
+        authorUrl: sanitizedHref,
+        score,
+        inActorContainer,
+      });
     }
-    if (profileAnchor) break;
   }
 
-  let rawAuthor = "";
-  let authorUrl = "";
+  // Sort candidates by score descending
+  candidateAnchors.sort((a, b) => b.score - a.score);
 
-  if (profileAnchor) {
-    const rawHref = profileAnchor.getAttribute("href") || profileAnchor.href || "";
-    const sanitized = sanitizeUrlFn(rawHref);
-    if (isValidAuthorUrl(sanitized)) {
-      authorUrl = sanitized;
+  if (candidateAnchors.length > 0 && candidateAnchors[0].score > 0) {
+    const winner = candidateAnchors[0];
+    const anchor = winner.anchor;
+    const authorUrl = winner.authorUrl;
+
+    // Resolve name from winning identity subtree
+    let rawAuthor = "";
+
+    // Priority 1: Exact explicit metadata if present and matches scope
+    if (explicitAuthorName && winner.score >= 100) {
+      rawAuthor = explicitAuthorName;
     }
 
-    // Coupled Name Extraction Priority:
-    // Priority 1: aria-label on the anchor
-    const ariaLabel = profileAnchor.getAttribute("aria-label");
-    if (ariaLabel && cleanAuthorName(ariaLabel)) {
-      rawAuthor = ariaLabel;
-    }
-
-    // Priority 2: explicit author-name semantic element within anchor or actor scope
+    // Priority 2: aria-label on anchor
     if (!rawAuthor) {
+      const ariaLabel = anchor.getAttribute("aria-label");
+      if (ariaLabel && cleanAuthorName(ariaLabel)) {
+        rawAuthor = ariaLabel;
+      }
+    }
+
+    // Priority 3: semantic name element within the winner's actor scope
+    if (!rawAuthor) {
+      const scope = anchor.closest?.(".update-components-actor, .feed-shared-actor") || anchor;
       const nameEl =
-        profileAnchor.querySelector(".update-components-actor__name") ||
-        profileAnchor.querySelector(".feed-shared-actor__name") ||
-        profileAnchor.querySelector("span[dir='ltr']") ||
-        searchRoot.querySelector(".update-components-actor__name") ||
-        searchRoot.querySelector(".feed-shared-actor__name") ||
-        searchRoot.querySelector("span[dir='ltr']");
+        scope.querySelector(".update-components-actor__name") ||
+        scope.querySelector(".feed-shared-actor__name") ||
+        scope.querySelector("span[dir='ltr']");
       if (nameEl?.innerText?.trim()) {
         rawAuthor = nameEl.innerText.trim();
       } else if (nameEl?.textContent?.trim()) {
@@ -150,38 +268,45 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       }
     }
 
-    // Priority 3: textContent of the anchor
-    if (!rawAuthor && profileAnchor.textContent?.trim()) {
-      rawAuthor = profileAnchor.textContent.trim();
+    // Priority 4: text content of the anchor
+    if (!rawAuthor && anchor.textContent?.trim()) {
+      rawAuthor = anchor.textContent.trim();
     }
 
-    // Priority 4: image alt text
+    // Priority 5: image alt
     if (!rawAuthor) {
-      const img = profileAnchor.querySelector("img[alt]");
+      const img = anchor.querySelector("img[alt]");
       if (img?.getAttribute("alt")?.trim()) {
         rawAuthor = img.getAttribute("alt").trim();
       }
     }
+
+    const author = cleanAuthorName(rawAuthor);
+    return { author, authorUrl };
   }
 
-  // 3. Fallback: Semantic Name Element without Link
-  if (!rawAuthor) {
-    const nameEl =
-      searchRoot.querySelector(".update-components-actor__name") ||
-      searchRoot.querySelector(".feed-shared-actor__name") ||
-      searchRoot.querySelector("span.update-components-actor__title span[dir='ltr']");
-    if (nameEl) {
-      if (!nameEl.closest?.(".update-components-header") && !nameEl.closest?.(".feed-shared-header")) {
-        rawAuthor = (nameEl.innerText || nameEl.textContent || "").trim();
-      }
-    }
+  // 3. Fallback: Semantic Name Element without Link (outside social context)
+  const nameEl =
+    el.querySelector(".update-components-actor__name") ||
+    el.querySelector(".feed-shared-actor__name") ||
+    el.querySelector("span.update-components-actor__title span[dir='ltr']");
+
+  if (nameEl && !isDisqualifiedElement(nameEl)) {
+    const rawAuthor = (nameEl.innerText || nameEl.textContent || "").trim();
+    const cleanName = cleanAuthorName(rawAuthor);
+    return {
+      author: cleanName,
+      authorUrl: "",
+    };
   }
 
-  const cleanName = cleanAuthorName(rawAuthor);
+  // If explicit metadata was on the container but no links found
+  if (explicitAuthorName) {
+    return {
+      author: explicitAuthorName,
+      authorUrl: "",
+    };
+  }
 
-  // Strict Author Absence Semantics: return empty strings if no trustworthy identity
-  return {
-    author: cleanName,
-    authorUrl: authorUrl,
-  };
+  return { author: "", authorUrl: "" };
 }

@@ -10,21 +10,36 @@ import { sanitizeUrl } from "../src/storage/saved-posts-store.js";
 
 // Minimal DOM mock helper for Node test environment
 function createMockElement(tag, attrs = {}, children = [], textContent = "") {
+  const classListSet = new Set((attrs.class || "").split(/\s+/).filter(Boolean));
+
   const el = {
     tagName: tag.toUpperCase(),
     attributes: { ...attrs },
     children: [...children],
     textContent: textContent,
     innerText: textContent,
+    parentElement: null,
+    classList: {
+      contains(cls) {
+        return classListSet.has(cls);
+      },
+    },
     getAttribute(name) {
       return this.attributes[name] || null;
     },
     setAttribute(name, val) {
       this.attributes[name] = val;
+      if (name === "class") {
+        classListSet.clear();
+        (val || "").split(/\s+/).filter(Boolean).forEach((c) => classListSet.add(c));
+      }
     },
     closest(selector) {
-      if (selector === ".update-components-header" && this.isInsideHeader) return true;
-      if (selector === ".feed-shared-header" && this.isInsideHeader) return true;
+      let current = this;
+      while (current) {
+        if (matchesSingleSelector(current, selector)) return current;
+        current = current.parentElement;
+      }
       return null;
     },
     querySelector(selector) {
@@ -51,8 +66,11 @@ function createMockElement(tag, attrs = {}, children = [], textContent = "") {
     },
   };
 
+  // Set parent pointers
   for (const c of children) {
-    if (attrs.href) c.parentHref = attrs.href;
+    if (c && typeof c === "object") {
+      c.parentElement = el;
+    }
   }
 
   return el;
@@ -86,6 +104,13 @@ function matchesSingleSelector(el, sel) {
   if (sel.includes("[data-testid=\"expandable-text-box\"]") || sel.includes("[data-testid='expandable-text-box']")) {
     return el.attributes["data-testid"] === "expandable-text-box";
   }
+  if (sel.includes("[data-testid='actor-container']")) {
+    return el.attributes["data-testid"] === "actor-container";
+  }
+  if (sel.includes("[aria-label*='post by ']") || sel.includes("[aria-label*='Post by ']")) {
+    const aria = (el.attributes["aria-label"] || "").toLowerCase();
+    return aria.includes("post by ");
+  }
   return false;
 }
 
@@ -113,12 +138,88 @@ test("isValidAuthorUrl - validates author identity paths and rejects invalid end
   assert.ok(!isValidAuthorUrl("https://google.com"));
 });
 
+test("Ranked Pipeline: Excludes liker header and selects real author (Mohammad Abedini vs Armin Daraei)", () => {
+  // 1. Social activity header: Mohammad Abedini likes this
+  const likerSpan = createMockElement("SPAN", {}, [], "Mohammad Abedini");
+  const likerAnchor = createMockElement(
+    "A",
+    { class: "app-aware-link", href: "https://www.linkedin.com/in/mohammad-abedini-979986b2/" },
+    [likerSpan],
+    "Mohammad Abedini"
+  );
+  const socialTextSpan = createMockElement("SPAN", {}, [], "likes this");
+  const headerWrapper = createMockElement("DIV", { class: "update-components-header__text-wrapper" }, [likerAnchor, socialTextSpan], "Mohammad Abedini likes this");
+  const socialHeader = createMockElement("DIV", { class: "update-components-header" }, [headerWrapper]);
+
+  // 2. Real post author: Armin Daraei
+  const authorNameDir = createMockElement("SPAN", { dir: "ltr" }, [], "Armin Daraei");
+  const authorNameSpan = createMockElement("SPAN", { class: "update-components-actor__name" }, [authorNameDir], "Armin Daraei");
+  const authorMeta = createMockElement("DIV", { class: "update-components-actor__meta" }, [authorNameSpan]);
+  const authorAnchor = createMockElement(
+    "A",
+    {
+      class: "app-aware-link update-components-actor__image",
+      href: "https://www.linkedin.com/in/armin-daraei-12345/",
+      "aria-label": "Armin Daraei",
+    },
+    [authorMeta],
+    "Armin Daraei"
+  );
+  const actorContainer = createMockElement(
+    "DIV",
+    {
+      class: "update-components-actor",
+      "aria-label": "Feed post by Armin Daraei",
+    },
+    [authorAnchor]
+  );
+
+  // 3. Post body
+  const bodyText = createMockElement("DIV", { class: "update-components-text" }, [], "Excited to share our new research in AI agent architectures!");
+
+  // Main container
+  const postContainer = createMockElement("DIV", { class: "feed-shared-update-v2" }, [socialHeader, actorContainer, bodyText]);
+
+  const result = extractAuthor(postContainer);
+
+  assert.equal(result.author, "Armin Daraei");
+  assert.equal(result.authorUrl, "https://linkedin.com/in/armin-daraei-12345");
+});
+
+test("Ranked Pipeline: Excludes commenter profiles inside comments section", () => {
+  // Post author: Alice
+  const authorAnchor = createMockElement(
+    "A",
+    { class: "update-components-actor__image", href: "https://www.linkedin.com/in/alice" },
+    [],
+    "Alice Engineer"
+  );
+  const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [authorAnchor]);
+
+  // Commenter: Bob
+  const commenterAnchor = createMockElement(
+    "A",
+    { class: "comments-post-meta__name-link", href: "https://www.linkedin.com/in/bob" },
+    [],
+    "Bob Commenter"
+  );
+  const commentItem = createMockElement("DIV", { class: "comments-comment-item" }, [commenterAnchor]);
+  const commentsSection = createMockElement("DIV", { class: "comments-comments-list" }, [commentItem]);
+
+  const postContainer = createMockElement("DIV", {}, [actorContainer, commentsSection]);
+
+  const result = extractAuthor(postContainer);
+
+  assert.equal(result.author, "Alice Engineer");
+  assert.equal(result.authorUrl, "https://linkedin.com/in/alice");
+});
+
 test("Case A: Personal profile anchor with badge and accessible text", () => {
   const badgeSpan = createMockElement("SPAN", {}, [], "• 1st");
   const anchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link update-components-actor__image",
       href: "https://www.linkedin.com/in/alice?trk=feed-actor",
       "aria-label": "Alice Engineer",
     },
@@ -139,7 +240,7 @@ test("Case B: Company page profile anchor", () => {
   const anchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link feed-shared-actor__container-link",
       href: "https://www.linkedin.com/company/acme-corp/",
       "aria-label": "Acme Corp",
     },
@@ -147,7 +248,7 @@ test("Case B: Company page profile anchor", () => {
     "Acme Corp"
   );
 
-  const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
+  const actorContainer = createMockElement("DIV", { class: "feed-shared-actor" }, [anchor]);
   const postContainer = createMockElement("DIV", {}, [actorContainer]);
 
   const result = extractAuthor(postContainer);
@@ -160,7 +261,7 @@ test("Case C: School page profile anchor", () => {
   const anchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link update-components-actor__image",
       href: "https://www.linkedin.com/school/mit",
       "aria-label": "MIT",
     },
@@ -168,7 +269,8 @@ test("Case C: School page profile anchor", () => {
     "MIT"
   );
 
-  const postContainer = createMockElement("DIV", {}, [anchor]);
+  const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
+  const postContainer = createMockElement("DIV", {}, [actorContainer]);
   const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "MIT");
@@ -179,7 +281,7 @@ test("Case D: Showcase page profile anchor", () => {
   const anchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link update-components-actor__image",
       href: "https://www.linkedin.com/showcase/google-cloud",
       "aria-label": "Google Cloud",
     },
@@ -187,7 +289,8 @@ test("Case D: Showcase page profile anchor", () => {
     "Google Cloud"
   );
 
-  const postContainer = createMockElement("DIV", {}, [anchor]);
+  const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
+  const postContainer = createMockElement("DIV", {}, [actorContainer]);
   const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Google Cloud");
@@ -227,12 +330,11 @@ test("Case G: Body text mentions must NOT be mistaken for author", () => {
 
 test("Case H: Repost header contamination is excluded", () => {
   const reshareHeader = createMockElement("DIV", { class: "update-components-header" }, [], "Jane Doe reposted this");
-  reshareHeader.isInsideHeader = true;
 
   const originalAnchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link update-components-actor__image",
       href: "https://www.linkedin.com/in/alice",
       "aria-label": "Alice Engineer",
     },
@@ -263,7 +365,7 @@ test("Production Integration: extractPost() uses extractAuthor() and canonical s
   const anchor = createMockElement(
     "A",
     {
-      class: "app-aware-link",
+      class: "app-aware-link update-components-actor__image",
       href: "https://www.linkedin.com/in/carol-danvers?trk=feed",
       "aria-label": "Carol Danvers",
     },
