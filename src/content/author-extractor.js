@@ -1,6 +1,10 @@
 // src/content/author-extractor.js
 // Ranked candidate-selection author identity extractor for LinkedIn posts.
 // Supports personal (/in/), company (/company/), school (/school/), and showcase (/showcase/) profiles.
+//
+// CORE INVARIANT:
+// `author` and `authorUrl` must ALWAYS originate from the exact same winning identity candidate / subtree.
+// Explicit metadata or headers from one actor MUST NEVER be paired with a profile URL of another actor.
 
 import { sanitizeUrl } from "../storage/saved-posts-store.js";
 
@@ -104,6 +108,46 @@ function isDisqualifiedElement(el) {
 }
 
 /**
+ * Checks whether a candidate anchor's subtree matches a target author name.
+ * Prevents cross-contamination where explicit post metadata of Actor A is applied to Actor B's URL.
+ *
+ * @param {Element} anchor
+ * @param {string} authorUrl
+ * @param {string} explicitName
+ * @returns {boolean}
+ */
+function doesCandidateMatchExplicitName(anchor, authorUrl, explicitName) {
+  if (!explicitName || typeof explicitName !== "string") return false;
+  const target = explicitName.trim().toLowerCase();
+  if (!target) return false;
+
+  const aria = cleanAuthorName(anchor.getAttribute?.("aria-label") || "").toLowerCase();
+  if (aria === target) return true;
+
+  const text = cleanAuthorName(anchor.textContent || "").toLowerCase();
+  if (text === target) return true;
+
+  const scope = anchor.closest?.(".update-components-actor, .feed-shared-actor") || anchor;
+  const nameEl =
+    scope.querySelector?.(".update-components-actor__name") ||
+    scope.querySelector?.(".feed-shared-actor__name") ||
+    scope.querySelector?.("span[dir='ltr']");
+  const scopeName = cleanAuthorName(nameEl?.innerText || nameEl?.textContent || "").toLowerCase();
+  if (scopeName === target) return true;
+
+  const img = anchor.querySelector?.("img[alt]");
+  const alt = cleanAuthorName(img?.getAttribute?.("alt") || "").toLowerCase();
+  if (alt === target) return true;
+
+  // Check URL slug (e.g. "https://linkedin.com/in/armindaraei" matches "Armin Daraei")
+  const targetSlug = target.replace(/[^a-z0-9]/g, "");
+  const urlSlug = (authorUrl || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (targetSlug.length >= 4 && urlSlug.includes(targetSlug)) return true;
+
+  return false;
+}
+
+/**
  * Extracts explicit post author metadata from container accessibility labels if present.
  * Covers:
  * - aria-label="Open control menu for post by Armin Daraei"
@@ -144,6 +188,8 @@ export function extractExplicitAuthorMetadata(root) {
 /**
  * Extracts coupled author name and canonical author profile URL from a post DOM container
  * using a ranked candidate-selection pipeline.
+ *
+ * INVARIANT: Both `author` and `authorUrl` strictly originate from the winning identity candidate subtree.
  *
  * @param {Element|Object} el - Post container element
  * @param {Function} [sanitizeUrlFn=sanitizeUrl] - Canonical URL sanitization function
@@ -222,14 +268,8 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       const cleanAria = cleanAuthorName(ariaLabel);
       const cleanText = cleanAuthorName(text);
 
-      if (explicitAuthorName) {
-        if (
-          cleanAria.toLowerCase() === explicitAuthorName.toLowerCase() ||
-          cleanText.toLowerCase() === explicitAuthorName.toLowerCase() ||
-          sanitizedHref.toLowerCase().includes(explicitAuthorName.toLowerCase().replace(/\s+/g, ""))
-        ) {
-          score += 200;
-        }
+      if (explicitAuthorName && doesCandidateMatchExplicitName(a, sanitizedHref, explicitAuthorName)) {
+        score += 200;
       }
 
       if (cleanAria || cleanText) score += 20;
@@ -251,15 +291,15 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
     const anchor = winner.anchor;
     const authorUrl = winner.authorUrl;
 
-    // Resolve name from winning identity subtree
+    // CORE INVARIANT: author and authorUrl must always originate from the same winning identity subtree.
     let rawAuthor = "";
 
-    // Priority 1: Exact explicit metadata if present and matches scope
-    if (explicitAuthorName && winner.score >= 100) {
+    // If explicit metadata exists and genuinely matches this winning candidate subtree, use explicit name
+    if (explicitAuthorName && doesCandidateMatchExplicitName(anchor, authorUrl, explicitAuthorName)) {
       rawAuthor = explicitAuthorName;
     }
 
-    // Priority 2: aria-label on anchor
+    // Priority 1: aria-label on anchor
     if (!rawAuthor) {
       const ariaLabel = anchor.getAttribute("aria-label");
       if (ariaLabel && cleanAuthorName(ariaLabel)) {
@@ -267,7 +307,7 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       }
     }
 
-    // Priority 3: semantic name element within the winner's actor scope
+    // Priority 2: semantic name element within the winner's actor scope
     if (!rawAuthor) {
       const scope = anchor.closest?.(".update-components-actor, .feed-shared-actor") || anchor;
       const nameEl =
@@ -281,12 +321,12 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       }
     }
 
-    // Priority 4: text content of the anchor
+    // Priority 3: text content of the anchor
     if (!rawAuthor && anchor.textContent?.trim()) {
       rawAuthor = anchor.textContent.trim();
     }
 
-    // Priority 5: image alt
+    // Priority 4: image alt
     if (!rawAuthor) {
       const img = anchor.querySelector("img[alt]");
       if (img?.getAttribute("alt")?.trim()) {

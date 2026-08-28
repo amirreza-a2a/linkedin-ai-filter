@@ -113,8 +113,13 @@ function matches(node, sel) {
 
 /**
  * Immutable Golden LinkedIn DOM Fixture
- * Matches the exact ordering of real LinkedIn feed posts where a social activity liker header
- * appears BEFORE the genuine post author.
+ * Matches the exact structure and ordering of real LinkedIn feed posts:
+ * 1. Liker header (Mohammad Abedini, /in/mohammadabedini/, likes this) appearing BEFORE the real author
+ * 2. Control menu (aria-label="Open control menu for post by Armin Daraei" & aria-label="Hide post by Armin Daraei")
+ * 3. Real author actor (Armin Daraei, /in/armindaraei/, "Armin Daraei • 1st", "AI & Systems Engineer")
+ * 4. Follow button (aria-label="Follow Armin Daraei")
+ * 5. Post text content
+ * 6. Social actions and comments list
  */
 function createGoldenLinkedInPostFixture() {
   // 1. Social Activity Liker Header (Mohammad Abedini likes this)
@@ -149,7 +154,7 @@ function createGoldenLinkedInPostFixture() {
   });
   const controlMenu = el("DIV", { class: "feed-shared-control-menu" }, [controlMenuBtn1, controlMenuBtn2]);
 
-  // 3. Primary Post Author Actor
+  // 3. Primary Post Author Actor (Armin Daraei)
   const authorImg = el("IMG", { alt: "Armin Daraei" });
   const authorImgWrapper = el("DIV", { class: "ivm-image-view-model" }, [authorImg]);
   const authorAvatarAnchor = el(
@@ -247,7 +252,7 @@ test("Golden DOM Regression: Extracts Armin Daraei and NEVER Mohammad Abedini", 
   assert.equal(result.author, "Armin Daraei");
   assert.equal(result.authorUrl, "https://linkedin.com/in/armindaraei");
 
-  // Strict Negative Assertions
+  // Strict Negative Invariants
   assert.notEqual(result.author, "Mohammad Abedini");
   assert.notEqual(result.authorUrl, "https://linkedin.com/in/mohammadabedini");
   assert.notEqual(result.author, "Jane Commenter");
@@ -266,7 +271,7 @@ test("Golden DOM Regression: Production extractPost() extracts verified post dat
   assert.equal(extracted.postUrl, "https://www.linkedin.com/feed/update/urn:li:activity:7123456789012345678");
   assert.match(extracted.text, /Deep learning architectures/);
 
-  // Strict Negative Assertions
+  // Strict Negative Invariants
   assert.notEqual(extracted.author, "Mohammad Abedini");
   assert.notEqual(extracted.authorUrl, "https://linkedin.com/in/mohammadabedini");
 });
@@ -277,4 +282,37 @@ test("Golden DOM Signals: Validates exact aria-label control menu patterns", () 
   const container = el("DIV", {}, [btn1, btn2]);
 
   assert.equal(extractExplicitAuthorMetadata(container), "Armin Daraei");
+});
+
+test("Negative Invariant: Explicit metadata of Person A cannot be paired with profile URL of Person B", () => {
+  // Scenario: Container has metadata "post by Armin Daraei", but the only candidate anchor in the DOM is Alice
+  const aliceAnchor = el(
+    "A",
+    {
+      class: "app-aware-link update-components-actor__image",
+      href: "https://www.linkedin.com/in/alice-smith",
+      "aria-label": "Alice Smith",
+    },
+    [],
+    "Alice Smith"
+  );
+  const actorContainer = el("DIV", { class: "update-components-actor" }, [aliceAnchor]);
+
+  // Container has explicit label for Armin Daraei
+  const postContainer = el(
+    "DIV",
+    {
+      class: "feed-shared-update-v2",
+      "aria-label": "Feed post by Armin Daraei",
+    },
+    [actorContainer]
+  );
+
+  const result = extractAuthor(postContainer);
+
+  // CORE INVARIANT: author and authorUrl must originate from the SAME candidate subtree.
+  // The system must NEVER return { author: "Armin Daraei", authorUrl: "https://linkedin.com/in/alice-smith" }.
+  assert.equal(result.author, "Alice Smith");
+  assert.equal(result.authorUrl, "https://linkedin.com/in/alice-smith");
+  assert.notEqual(result.author, "Armin Daraei");
 });
