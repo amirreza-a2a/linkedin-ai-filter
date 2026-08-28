@@ -4,8 +4,9 @@ import {
   cleanAuthorName,
   isValidAuthorUrl,
   extractAuthor,
-  defaultSanitizeUrl,
 } from "../src/content/author-extractor.js";
+import { extractPost } from "../src/content/content-index.js";
+import { sanitizeUrl } from "../src/storage/saved-posts-store.js";
 
 // Minimal DOM mock helper for Node test environment
 function createMockElement(tag, attrs = {}, children = [], textContent = "") {
@@ -70,6 +71,8 @@ function matchesSingleSelector(el, sel) {
     if (sel.includes("href*='/company/'")) return (el.attributes.href || "").includes("/company/");
     if (sel.includes("href*='/school/'")) return (el.attributes.href || "").includes("/school/");
     if (sel.includes("href*='/showcase/'")) return (el.attributes.href || "").includes("/showcase/");
+    if (sel.includes("href*='/feed/update/'")) return (el.attributes.href || "").includes("/feed/update/");
+    if (sel.includes("href*='/posts/'")) return (el.attributes.href || "").includes("/posts/");
   }
   if (sel === "a[href]") {
     return el.tagName === "A" && Boolean(el.attributes.href);
@@ -79,6 +82,9 @@ function matchesSingleSelector(el, sel) {
   }
   if (sel.includes("span[dir='ltr']")) {
     return el.tagName === "SPAN" && el.attributes.dir === "ltr";
+  }
+  if (sel.includes("[data-testid=\"expandable-text-box\"]") || sel.includes("[data-testid='expandable-text-box']")) {
+    return el.attributes["data-testid"] === "expandable-text-box";
   }
   return false;
 }
@@ -123,7 +129,7 @@ test("Case A: Personal profile anchor with badge and accessible text", () => {
   const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
   const postContainer = createMockElement("DIV", { class: "feed-shared-update-v2" }, [actorContainer]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Alice Engineer");
   assert.equal(result.authorUrl, "https://linkedin.com/in/alice");
@@ -144,7 +150,7 @@ test("Case B: Company page profile anchor", () => {
   const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
   const postContainer = createMockElement("DIV", {}, [actorContainer]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Acme Corp");
   assert.equal(result.authorUrl, "https://linkedin.com/company/acme-corp");
@@ -163,7 +169,7 @@ test("Case C: School page profile anchor", () => {
   );
 
   const postContainer = createMockElement("DIV", {}, [anchor]);
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "MIT");
   assert.equal(result.authorUrl, "https://linkedin.com/school/mit");
@@ -182,7 +188,7 @@ test("Case D: Showcase page profile anchor", () => {
   );
 
   const postContainer = createMockElement("DIV", {}, [anchor]);
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Google Cloud");
   assert.equal(result.authorUrl, "https://linkedin.com/showcase/google-cloud");
@@ -193,7 +199,7 @@ test("Case E: Name only available without profile URL", () => {
   const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [nameSpan]);
   const postContainer = createMockElement("DIV", {}, [actorContainer]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Bob Builder");
   assert.equal(result.authorUrl, "");
@@ -203,7 +209,7 @@ test("Case F: No reliable author element in DOM", () => {
   const spacer = createMockElement("DIV", { class: "spacer" }, [], "Advertisement");
   const postContainer = createMockElement("DIV", {}, [spacer]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "");
   assert.equal(result.authorUrl, "");
@@ -213,7 +219,7 @@ test("Case G: Body text mentions must NOT be mistaken for author", () => {
   const bodyText = createMockElement("DIV", { class: "expandable-text-box" }, [], "Thanks to @Elon Musk for the ideas.");
   const postContainer = createMockElement("DIV", {}, [bodyText]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "");
   assert.equal(result.authorUrl, "");
@@ -237,18 +243,59 @@ test("Case H: Repost header contamination is excluded", () => {
 
   const postContainer = createMockElement("DIV", {}, [reshareHeader, actorContainer]);
 
-  const result = extractAuthor(postContainer, defaultSanitizeUrl);
+  const result = extractAuthor(postContainer);
 
   assert.equal(result.author, "Alice Engineer");
   assert.equal(result.authorUrl, "https://linkedin.com/in/alice");
 });
 
 test("Case I: Canonical URL equivalence through sanitizer single source of truth", () => {
-  const u1 = defaultSanitizeUrl("https://www.linkedin.com/in/alice/");
-  const u2 = defaultSanitizeUrl("https://linkedin.com/in/alice?trk=profile-view");
-  const u3 = defaultSanitizeUrl("https://www.linkedin.com/in/alice#details");
+  const u1 = sanitizeUrl("https://www.linkedin.com/in/alice/");
+  const u2 = sanitizeUrl("https://linkedin.com/in/alice?trk=profile-view");
+  const u3 = sanitizeUrl("https://www.linkedin.com/in/alice#details");
 
   assert.equal(u1, "https://linkedin.com/in/alice");
   assert.equal(u2, "https://linkedin.com/in/alice");
   assert.equal(u3, "https://linkedin.com/in/alice");
+});
+
+test("Production Integration: extractPost() uses extractAuthor() and canonical sanitizeUrl()", () => {
+  const anchor = createMockElement(
+    "A",
+    {
+      class: "app-aware-link",
+      href: "https://www.linkedin.com/in/carol-danvers?trk=feed",
+      "aria-label": "Carol Danvers",
+    },
+    [],
+    "Carol Danvers"
+  );
+  const actorContainer = createMockElement("DIV", { class: "update-components-actor" }, [anchor]);
+
+  const textEl = createMockElement("DIV", { "data-testid": "expandable-text-box" }, [], "Exploring quantum entanglement in aerospace computing.");
+
+  const permalinkAnchor = createMockElement(
+    "A",
+    {
+      class: "app-aware-link",
+      href: "https://www.linkedin.com/feed/update/urn:li:activity:7999888777?trk=feed",
+    },
+    [],
+    "1h"
+  );
+
+  const postContainer = createMockElement(
+    "DIV",
+    { "data-urn": "urn:li:activity:7999888777" },
+    [actorContainer, textEl, permalinkAnchor]
+  );
+
+  const extracted = extractPost(postContainer);
+
+  assert.ok(extracted);
+  assert.equal(extracted.id, "urn:li:activity:7999888777");
+  assert.equal(extracted.author, "Carol Danvers");
+  assert.equal(extracted.authorUrl, "https://linkedin.com/in/carol-danvers");
+  assert.equal(extracted.postUrl, "https://www.linkedin.com/feed/update/urn:li:activity:7999888777");
+  assert.equal(extracted.text, "Exploring quantum entanglement in aerospace computing.");
 });

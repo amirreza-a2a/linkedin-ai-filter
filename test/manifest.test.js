@@ -25,4 +25,8 @@ test("manifest.json - Valid Manifest V3 with minimal required permissions", () =
   // Verify background service worker configuration
   assert.equal(manifest.background.service_worker, "src/background/service-worker.js");
   assert.equal(manifest.background.type, "module");
+
+  // Verify web_accessible_resources configuration for content modules
+  assert.ok(Array.isArray(manifest.web_accessible_resources));
+  assert.ok(manifest.web_accessible_resources.length >= 1);
 });

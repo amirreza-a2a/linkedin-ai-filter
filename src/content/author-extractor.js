@@ -1,32 +1,11 @@
 // src/content/author-extractor.js
-// Deterministic, coupled author identity extractor for LinkedIn posts.
+// Dedicated, coupled author identity extractor for LinkedIn posts.
 // Supports personal (/in/), company (/company/), school (/school/), and showcase (/showcase/) profiles.
+
+import { sanitizeUrl } from "../storage/saved-posts-store.js";
 
 const VALID_AUTHOR_PATH_REGEX = /\/(in|company|school|showcase)\/[a-zA-Z0-9_\-%]+/i;
 const INVALID_AUTHOR_PATH_REGEX = /\/(feed\/update|posts|messaging|jobs|notifications)\b/i;
-
-/**
- * Normalizes a raw URL via the standard sanitization rules:
- * - Strictly allows http: and https:
- * - Strips query parameters (?trk=...), fragments (#...), www. prefix, and trailing slashes.
- *
- * @param {string} rawUrl
- * @returns {string}
- */
-export function defaultSanitizeUrl(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.trim()) return "";
-  try {
-    const parsed = new URL(rawUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "";
-    }
-    const host = parsed.host.toLowerCase().replace(/^www\./, "");
-    const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
-    return `${parsed.protocol}//${host}${pathname === "/" ? "" : pathname}`;
-  } catch {
-    return "";
-  }
-}
 
 /**
  * Verifies that a URL points to a legitimate LinkedIn actor identity destination.
@@ -79,10 +58,10 @@ export function cleanAuthorName(rawName) {
  * Extracts coupled author name and canonical author profile URL from a post DOM container.
  *
  * @param {Element|Object} el - Post container element
- * @param {Function} [sanitizeUrlFn=defaultSanitizeUrl] - URL sanitization function
+ * @param {Function} [sanitizeUrlFn=sanitizeUrl] - Canonical URL sanitization function
  * @returns {{ author: string, authorUrl: string }}
  */
-export function extractAuthor(el, sanitizeUrlFn = defaultSanitizeUrl) {
+export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
   if (!el || typeof el.querySelector !== "function") {
     return { author: "", authorUrl: "" };
   }
