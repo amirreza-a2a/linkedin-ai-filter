@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildKnowledgeGraph } from "../src/graph/graph-builder.js";
 import { ForceLayout } from "../src/graph/force-layout.js";
+import { sanitizeSavedPost } from "../src/storage/saved-posts-store.js";
 
 test("buildKnowledgeGraph - handles empty dataset", () => {
   assert.deepEqual(buildKnowledgeGraph([]), { nodes: [], edges: [] });
@@ -99,6 +100,41 @@ test("buildKnowledgeGraph - canonical author identity resolution (URL vs name fa
   assert.equal(charlieNode.count, 2);
 });
 
+test("buildKnowledgeGraph - equivalent LinkedIn author URLs produce the same Author node", () => {
+  // Canonicalized via sanitizeSavedPost single source of truth
+  const p1 = sanitizeSavedPost({
+    id: "p1",
+    text: "Post 1",
+    author: "Alice",
+    authorUrl: "https://www.linkedin.com/in/alice",
+    topics: ["AI"],
+  });
+  const p2 = sanitizeSavedPost({
+    id: "p2",
+    text: "Post 2",
+    author: "Alice",
+    authorUrl: "https://linkedin.com/in/alice/",
+    topics: ["AI"],
+  });
+  const p3 = sanitizeSavedPost({
+    id: "p3",
+    text: "Post 3",
+    author: "Alice",
+    authorUrl: "https://linkedin.com/in/alice?trk=profile-view",
+    topics: ["AI"],
+  });
+
+  assert.equal(p1.authorUrl, "https://linkedin.com/in/alice");
+  assert.equal(p2.authorUrl, "https://linkedin.com/in/alice");
+  assert.equal(p3.authorUrl, "https://linkedin.com/in/alice");
+
+  const graph = buildKnowledgeGraph([p1, p2, p3]);
+  const authorNodes = graph.nodes.filter((n) => n.type === "author");
+  assert.equal(authorNodes.length, 1);
+  assert.equal(authorNodes[0].id, "author:url:https://linkedin.com/in/alice");
+  assert.equal(authorNodes[0].count, 3);
+});
+
 test("buildKnowledgeGraph - missing fields & no dangling edges", () => {
   const posts = [
     { id: "p1", text: "Anonymous post with no author and no topics", author: "", authorUrl: "", topics: [] },
@@ -147,7 +183,7 @@ test("ForceLayout - deterministic circular initialization and physics convergenc
     assert.ok(typeof node.y === "number" && !isNaN(node.y));
   }
 
-  // Run 100 ticks to convergence
+  // Run ticks to convergence
   let ticks = 0;
   let done = false;
   while (!done && ticks < 200) {

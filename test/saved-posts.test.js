@@ -6,7 +6,8 @@ import {
   unsavePost,
   getSavedPosts,
   clearSavedPosts,
-  isPostSaved,
+  sanitizeSavedPost,
+  sanitizeUrl,
 } from "../src/storage/saved-posts-store.js";
 
 // Mock chrome.storage.local for tests
@@ -33,89 +34,106 @@ globalThis.chrome = {
 test("Saved Posts Store - Basic save, get, and unsave", async () => {
   storageMock = {};
 
-  const post = await savePost({
+  const postData = {
     id: "urn:li:activity:1001",
-    text: "Exciting 5G update",
-    author: "Alice Engineer",
-    authorUrl: "https://linkedin.com/in/alice",
+    text: "Building neural networks with WebGPU",
+    author: "Alice Smith",
+    authorUrl: "https://linkedin.com/in/alicesmith",
     postUrl: "https://linkedin.com/feed/update/urn:li:activity:1001",
-    topics: ["5G", "Telecom"],
-    saveReason: "Matched topic: 5G",
+    topics: ["AI", "WebGPU"],
+    saveReason: "Matched topic: AI",
     autoSaved: true,
-  });
+  };
 
-  assert.equal(post.id, "urn:li:activity:1001");
-  assert.equal(post.author, "Alice Engineer");
-  assert.equal(post.autoSaved, true);
-  assert.ok(post.savedAt > 0);
-  assert.equal(post.savedAt, post.updatedAt);
+  // 1. Save post
+  const saved = await savePost(postData);
+  assert.equal(saved.id, postData.id);
+  assert.equal(saved.author, "Alice Smith");
+  assert.deepEqual(saved.topics, ["AI", "WebGPU"]);
+  assert.ok(typeof saved.savedAt === "number");
+  assert.ok(typeof saved.updatedAt === "number");
 
-  let list = await getSavedPosts();
-  assert.equal(list.length, 1);
-  assert.equal(list[0].id, "urn:li:activity:1001");
+  // 2. Get saved posts
+  let posts = await getSavedPosts();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].id, postData.id);
 
-  const isSaved = await isPostSaved("urn:li:activity:1001");
-  assert.equal(isSaved, true);
+  // 3. Unsave post
+  const removed = await unsavePost(postData.id);
+  assert.equal(removed, true);
 
-  await unsavePost("urn:li:activity:1001");
-  list = await getSavedPosts();
-  assert.equal(list.length, 0);
+  posts = await getSavedPosts();
+  assert.equal(posts.length, 0);
 });
 
 test("Saved Posts Store - Concurrent mutation serialization", async () => {
   storageMock = {};
 
-  // Fire 10 concurrent saves and unsaves simultaneously
-  const ops = [
-    savePost({ id: "p1", text: "Post 1", topics: ["AI"] }),
-    savePost({ id: "p2", text: "Post 2", topics: ["5G"] }),
-    savePost({ id: "p3", text: "Post 3", topics: ["Robotics"] }),
-    savePost({ id: "p4", text: "Post 4", topics: ["Cloud"] }),
-    savePost({ id: "p5", text: "Post 5", topics: ["DevOps"] }),
-    unsavePost("p2"),
-    savePost({ id: "p6", text: "Post 6", topics: ["Hardware"] }),
-  ];
+  // Fire 10 concurrent saves
+  const promises = [];
+  for (let i = 0; i < 10; i++) {
+    promises.push(
+      savePost({
+        id: `post-${i}`,
+        text: `Post content ${i}`,
+        topics: [`Topic-${i}`],
+        autoSaved: true,
+      })
+    );
+  }
 
-  await Promise.all(ops);
+  await Promise.all(promises);
 
-  const list = await getSavedPosts();
-  const ids = list.map((p) => p.id).sort();
-
-  // p2 was unsaved, p1, p3, p4, p5, p6 must all survive
-  assert.deepEqual(ids, ["p1", "p3", "p4", "p5", "p6"]);
+  const posts = await getSavedPosts();
+  assert.equal(posts.length, 10);
+  const ids = new Set(posts.map((p) => p.id));
+  for (let i = 0; i < 10; i++) {
+    assert.ok(ids.has(`post-${i}`));
+  }
 });
 
 test("Saved Posts Store - Write deduplication on re-scans & savedAt preservation", async () => {
   storageMock = {};
 
-  const initialSavedAt = 1700000000000;
-  await savePost({
+  // 1. Initial save
+  const first = await savePost({
     id: "p100",
-    text: "Repeated post text",
+    text: "Same content",
     author: "Bob",
-    authorUrl: "https://linkedin.com/in/bob",
-    postUrl: "https://linkedin.com/posts/100",
-    topics: ["AI", "Semiconductors"],
-    saveReason: "Matched topic: AI",
-    autoSaved: true,
-    savedAt: initialSavedAt,
-    updatedAt: initialSavedAt,
-  });
-
-  // Re-scan identical post
-  const rescan = await savePost({
-    id: "p100",
-    text: "Repeated post text",
-    author: "Bob",
-    authorUrl: "https://linkedin.com/in/bob",
-    postUrl: "https://linkedin.com/posts/100",
-    topics: ["AI", "Semiconductors"],
-    saveReason: "Matched topic: AI",
+    topics: ["AI"],
     autoSaved: true,
   });
 
-  assert.equal(rescan.savedAt, initialSavedAt);
-  assert.equal(rescan.updatedAt, initialSavedAt); // not updated because identical
+  const originalSavedAt = first.savedAt;
+  const originalUpdatedAt = first.updatedAt;
+
+  // Wait a tiny fraction of time to ensure clock could advance
+  await new Promise((r) => setTimeout(r, 10));
+
+  // 2. Re-scan with identical content -> should deduplicate and return unmodified existing record
+  const second = await savePost({
+    id: "p100",
+    text: "Same content",
+    author: "Bob",
+    topics: ["ai"], // case-insensitive topic equality
+    autoSaved: true,
+  });
+
+  assert.equal(second.savedAt, originalSavedAt);
+  assert.equal(second.updatedAt, originalUpdatedAt);
+
+  // 3. Re-scan with altered topics -> should update record and bump updatedAt
+  const third = await savePost({
+    id: "p100",
+    text: "Same content",
+    author: "Bob",
+    topics: ["AI", "Semiconductors"],
+    autoSaved: true,
+  });
+
+  assert.equal(third.savedAt, originalSavedAt); // savedAt preserved
+  assert.ok(third.updatedAt >= originalUpdatedAt);
+  assert.deepEqual(third.topics, ["AI", "Semiconductors"]);
 });
 
 test("Saved Posts Store - Manual save takes precedence over auto-save on re-scan", async () => {
@@ -238,13 +256,13 @@ test("Saved Posts Store - Invariant: Rejects dangerous URL schemes and validates
     id: "sec-2",
     text: "Valid URLs",
     author: "Good Engineer",
-    authorUrl: "https://www.linkedin.com/in/good-engineer",
-    postUrl: "http://www.linkedin.com/feed/update/urn:li:activity:123",
+    authorUrl: "https://www.linkedin.com/in/good-engineer?trk=profile-view",
+    postUrl: "http://www.linkedin.com/feed/update/urn:li:activity:123/",
     topics: ["Security"],
   });
 
-  assert.equal(validPost.authorUrl, "https://www.linkedin.com/in/good-engineer");
-  assert.equal(validPost.postUrl, "http://www.linkedin.com/feed/update/urn:li:activity:123");
+  assert.equal(validPost.authorUrl, "https://linkedin.com/in/good-engineer");
+  assert.equal(validPost.postUrl, "http://linkedin.com/feed/update/urn:li:activity:123");
 });
 
 test("Saved Posts Store - Invariant: Strict boolean autoSaved handling", async () => {

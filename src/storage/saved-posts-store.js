@@ -15,30 +15,45 @@ export function withSerializedMutation(operation) {
 }
 
 /**
- * Validates and sanitizes a URL, allowing only safe http: and https: protocols.
- * Rejects javascript:, data:, file:, chrome:, or malformed URLs.
+ * Validates, sanitizes, and canonicalizes a URL.
+ * - Allows only safe http: and https: protocols
+ * - Strips query parameters and hash fragments (e.g. tracking params ?trk=...)
+ * - Normalizes www. prefixes and trailing slashes
+ * - Rejects javascript:, data:, file:, chrome:, or malformed URLs
  *
  * @param {string} rawUrl
- * @returns {string} Safe URL or empty string
+ * @returns {string} Canonical URL or empty string
  */
 export function sanitizeUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") return "";
   const trimmed = rawUrl.trim();
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return trimmed;
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
     }
+    // Strip query parameters and hash fragments
+    parsed.search = "";
+    parsed.hash = "";
+    // Normalize hostname (lowercase and remove www. prefix)
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (parsed.hostname.startsWith("www.")) {
+      parsed.hostname = parsed.hostname.slice(4);
+    }
+    // Normalize trailing slash on path (e.g. /in/alice/ -> /in/alice)
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith("/")) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+    return parsed.toString();
   } catch {
     return "";
   }
-  return "";
 }
 
 /**
  * Normalizes a raw saved post object into the canonical SavedPost schema:
  * - Enforces max 4000 characters for post text
- * - Validates URLs to prevent malicious schemes (javascript:, data:, etc.)
+ * - Validates and canonicalizes URLs (http/https only, tracking params stripped)
  * - Enforces strict boolean for autoSaved (only === true is true)
  *
  * @param {Object} raw
