@@ -218,3 +218,63 @@ test("Pipeline Integration - classification -> topics -> save rule evaluation ->
   assert.equal(saved[0].saveReason, "Matched topic: 5G");
   assert.equal(saved[0].autoSaved, true);
 });
+
+test("Saved Posts Store - Invariant: Rejects dangerous URL schemes and validates URLs", async () => {
+  storageMock = {};
+
+  const post = await savePost({
+    id: "sec-1",
+    text: "Security test",
+    author: "Hacker",
+    authorUrl: "javascript:alert(1)",
+    postUrl: "data:text/html,<script>alert(1)</script>",
+    topics: ["Security"],
+  });
+
+  assert.equal(post.authorUrl, "");
+  assert.equal(post.postUrl, "");
+
+  const validPost = await savePost({
+    id: "sec-2",
+    text: "Valid URLs",
+    author: "Good Engineer",
+    authorUrl: "https://www.linkedin.com/in/good-engineer",
+    postUrl: "http://www.linkedin.com/feed/update/urn:li:activity:123",
+    topics: ["Security"],
+  });
+
+  assert.equal(validPost.authorUrl, "https://www.linkedin.com/in/good-engineer");
+  assert.equal(validPost.postUrl, "http://www.linkedin.com/feed/update/urn:li:activity:123");
+});
+
+test("Saved Posts Store - Invariant: Strict boolean autoSaved handling", async () => {
+  storageMock = {};
+
+  const p1 = await savePost({ id: "b1", text: "t", autoSaved: true });
+  const p2 = await savePost({ id: "b2", text: "t", autoSaved: "true" });
+  const p3 = await savePost({ id: "b3", text: "t", autoSaved: 1 });
+  const p4 = await savePost({ id: "b4", text: "t", autoSaved: false });
+  const p5 = await savePost({ id: "b5", text: "t", autoSaved: "false" });
+  const p6 = await savePost({ id: "b6", text: "t", autoSaved: null });
+
+  assert.equal(p1.autoSaved, true);
+  assert.equal(p2.autoSaved, false);
+  assert.equal(p3.autoSaved, false);
+  assert.equal(p4.autoSaved, false);
+  assert.equal(p5.autoSaved, false);
+  assert.equal(p6.autoSaved, false);
+});
+
+test("Saved Posts Store - Invariant: Enforces 4000 character maximum on post text", async () => {
+  storageMock = {};
+
+  const longText = "A".repeat(6000);
+  const post = await savePost({
+    id: "len-1",
+    text: longText,
+    topics: ["Text"],
+  });
+
+  assert.equal(post.text.length, 4000);
+  assert.equal(post.text, "A".repeat(4000));
+});

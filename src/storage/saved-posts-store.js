@@ -3,6 +3,7 @@
 // Serializes storage mutations to guarantee race-free concurrent updates.
 
 const SAVED_POSTS_KEY = "savedPosts";
+const MAX_TEXT_LENGTH = 4000;
 
 // Global sequential mutation lock
 let mutationQueue = Promise.resolve();
@@ -14,7 +15,31 @@ export function withSerializedMutation(operation) {
 }
 
 /**
- * Normalizes a raw saved post object into the canonical SavedPost schema.
+ * Validates and sanitizes a URL, allowing only safe http: and https: protocols.
+ * Rejects javascript:, data:, file:, chrome:, or malformed URLs.
+ *
+ * @param {string} rawUrl
+ * @returns {string} Safe URL or empty string
+ */
+export function sanitizeUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return trimmed;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+/**
+ * Normalizes a raw saved post object into the canonical SavedPost schema:
+ * - Enforces max 4000 characters for post text
+ * - Validates URLs to prevent malicious schemes (javascript:, data:, etc.)
+ * - Enforces strict boolean for autoSaved (only === true is true)
  *
  * @param {Object} raw
  * @returns {Object} Canonical SavedPost
@@ -23,15 +48,15 @@ export function sanitizeSavedPost(raw) {
   const now = Date.now();
   return {
     id: String(raw.id || "").trim(),
-    text: String(raw.text || "").trim(),
+    text: String(raw.text || "").trim().slice(0, MAX_TEXT_LENGTH),
     author: String(raw.author || "").trim(),
-    authorUrl: String(raw.authorUrl || "").trim(),
-    postUrl: String(raw.postUrl || "").trim(),
+    authorUrl: sanitizeUrl(raw.authorUrl),
+    postUrl: sanitizeUrl(raw.postUrl),
     topics: Array.isArray(raw.topics) ? raw.topics.filter((t) => typeof t === "string") : [],
     savedAt: typeof raw.savedAt === "number" && !isNaN(raw.savedAt) ? raw.savedAt : now,
     updatedAt: typeof raw.updatedAt === "number" && !isNaN(raw.updatedAt) ? raw.updatedAt : now,
     saveReason: String(raw.saveReason || "").trim(),
-    autoSaved: Boolean(raw.autoSaved),
+    autoSaved: raw.autoSaved === true,
   };
 }
 
