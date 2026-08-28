@@ -19,6 +19,25 @@ const DEFAULTS = {
   dailyCallCap: 500, // safety guardrail, requests not tokens
 };
 
+export const CACHE_VERSION = 2;
+
+export async function buildCacheKey({
+  version = CACHE_VERSION,
+  provider = "",
+  model = "",
+  rulesText = "",
+  text = "",
+}) {
+  const payload = JSON.stringify([
+    version,
+    String(provider).trim(),
+    String(model).trim(),
+    String(rulesText).trim(),
+    String(text),
+  ]);
+  return simpleHash(payload);
+}
+
 export async function getSettings() {
   const synced = (await chrome.storage.sync.get([
     "enabled",
@@ -65,8 +84,8 @@ export async function setSettings(partial) {
   }
 }
 
-// --- Decision cache: hash(postText + rulesText) -> {hide, reason, ts} ---
-// Avoids re-billing the API when the same post scrolls back into view.
+// --- Decision cache: hash(version + provider + model + rulesText + postText) -> {hide, reason, ts} ---
+// Avoids re-billing the API when the same post scrolls back into view under identical configuration.
 
 export async function getCachedDecision(hash) {
   const key = `cache:${hash}`;

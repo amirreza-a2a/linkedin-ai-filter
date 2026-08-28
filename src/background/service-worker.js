@@ -5,7 +5,8 @@ import {
   getCachedDecisions,
   setCachedDecisions,
   incrementAndCheckDailyCap,
-  simpleHash,
+  buildCacheKey,
+  CACHE_VERSION,
 } from "../storage/rules-store.js";
 import { appendLogEntries } from "../storage/log-store.js";
 
@@ -67,11 +68,25 @@ async function handleClassify(posts) {
     return results;
   }
 
-  // Check cache first in a single batch read
+  const provider = settings.provider || "openai";
+  const model = settings.model?.[provider] || "";
+  const rulesText = settings.rulesText || "";
+  const baseUrl = settings.baseUrl?.[provider] || "";
+  const apiKey = settings.apiKeys?.[provider] || "";
+
+  // Check cache first in a single batch read using isolated cache keys
   const results = new Array(posts.length);
   const uncached = [];
   const hashes = await Promise.all(
-    posts.map((p) => simpleHash(`${settings.rulesText}::${p.text}`))
+    posts.map((p) =>
+      buildCacheKey({
+        version: CACHE_VERSION,
+        provider,
+        model,
+        rulesText,
+        text: p.text,
+      })
+    )
   );
 
   const cachedMap = await getCachedDecisions(hashes);
@@ -98,16 +113,13 @@ async function handleClassify(posts) {
     return results;
   }
 
-  const classifyFn = getProviderFn(settings.provider);
-  const model = settings.model?.[settings.provider];
-  const baseUrl = settings.baseUrl?.[settings.provider] || "";
-  const apiKey = settings.apiKeys?.[settings.provider] || "";
+  const classifyFn = getProviderFn(provider);
 
   const apiResults = await classifyFn({
     apiKey,
     model,
     baseUrl,
-    rulesText: settings.rulesText,
+    rulesText,
     posts: uncached.map((u) => u.post),
   });
 
