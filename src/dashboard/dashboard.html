@@ -2,78 +2,231 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>FeedRule — Dashboard</title>
+  <title>FeedRule — Analytics & Dashboard</title>
   <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-      max-width: 900px; margin: 32px auto; padding: 0 16px; color: #1d1d1d;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 960px;
+      margin: 28px auto;
+      padding: 0 20px 40px;
+      color: #1d1d1d;
+      background: #f4f5f7;
     }
-    h1 { font-size: 20px; margin-bottom: 4px; }
-    .subtitle { color: #666; font-size: 13px; margin-bottom: 20px; }
-
-    .stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-    .stat-card {
-      flex: 1; min-width: 130px; border: 1px solid #eee; border-radius: 10px;
-      padding: 14px 16px; background: #fafafa;
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 12px;
     }
-    .stat-card .num { font-size: 24px; font-weight: 600; }
-    .stat-card .label { font-size: 12px; color: #777; margin-top: 2px; }
+    h1 { font-size: 22px; font-weight: 600; color: #0a66c2; }
+    .subtitle { color: #666; font-size: 13px; margin-top: 2px; }
+    .header-actions { display: flex; gap: 8px; }
 
-    .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    .btn {
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 14px;
+      border: 1px solid #0a66c2;
+      background: white;
+      color: #0a66c2;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      transition: background .15s;
+    }
+    .btn:hover { background: #ebf4fd; }
+    .btn-secondary { border-color: #ccc; color: #555; }
+    .btn-secondary:hover { background: #eee; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      background: white;
+      padding: 14px 16px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      flex-wrap: wrap;
+    }
     .toolbar select, .toolbar input[type="text"] {
-      padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px;
+      padding: 7px 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 12.5px;
+      background: white;
     }
-    .toolbar input[type="text"] { flex: 1; min-width: 160px; }
-    button.secondary {
-      padding: 6px 12px; border: 1px solid #ccc; background: white; border-radius: 14px;
-      font-size: 12px; cursor: pointer; color: #555;
+    .toolbar input[type="text"] { flex: 2; min-width: 180px; }
+    .toolbar select { flex: 1; min-width: 120px; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
     }
-    button.secondary:hover { background: #f3f3f3; }
+    .stat-card {
+      border: 1px solid #eaeaea;
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: white;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .stat-card .num { font-size: 22px; font-weight: 700; color: #191919; }
+    .stat-card .sub-num { font-size: 12px; font-weight: 500; color: #666; margin-top: 2px; }
+    .stat-card .label { font-size: 11.5px; color: #777; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .chart-card {
+      background: white;
+      border-radius: 8px;
+      padding: 18px 20px;
+      border: 1px solid #eaeaea;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .chart-title { font-size: 14px; font-weight: 600; color: #333; }
+    .chart-legend { display: flex; gap: 14px; font-size: 11.5px; color: #555; }
+    .legend-item { display: flex; align-items: center; gap: 5px; }
+    .legend-color { width: 10px; height: 10px; border-radius: 2px; }
+
+    .section-card {
+      background: white;
+      border-radius: 8px;
+      padding: 18px 20px;
+      border: 1px solid #eaeaea;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      margin-bottom: 24px;
+    }
+    .section-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: #222; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #eee; color: #888; font-weight: 500; font-size: 11px; text-transform: uppercase; }
+    th { text-align: left; padding: 9px 10px; border-bottom: 2px solid #eee; color: #777; font-weight: 600; font-size: 11px; text-transform: uppercase; }
     td { padding: 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
     tr:hover { background: #fafafa; }
 
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
     .badge.hidden { background: #fde8e8; color: #b23; }
     .badge.kept { background: #e8f5e9; color: #2a7a34; }
+    .badge.saved { background: #f3e8ff; color: #6b21a8; }
+    .badge.topic-tag { background: #f0f0f0; color: #444; font-weight: 500; margin-right: 4px; margin-bottom: 2px; }
 
-    .snippet { max-width: 420px; color: #333; }
-    .reason { color: #888; font-size: 12px; }
+    .snippet { max-width: 380px; color: #333; line-height: 1.4; word-break: break-word; }
+    .reason { color: #666; font-size: 12px; }
     .ts { color: #999; font-size: 12px; white-space: nowrap; }
 
-    .empty { text-align: center; padding: 40px 0; color: #999; font-size: 13px; }
+    .empty { text-align: center; padding: 40px 0; color: #888; font-size: 13px; }
   </style>
 </head>
 <body>
-  <h1>FeedRule Dashboard</h1>
-  <div class="subtitle">What's been hidden and kept from your LinkedIn feed, most recent first.</div>
-
-  <div class="stats" id="stats"></div>
+  <header>
+    <div>
+      <h1>FeedRule Analytics & Dashboard</h1>
+      <div class="subtitle">Retained filter and save decisions (rolling 500 max), most recent first.</div>
+    </div>
+    <div class="header-actions">
+      <a class="btn" href="src/saved/saved.html" id="openBrainBtn">🧠 Second Brain</a>
+      <button class="btn btn-secondary" id="clearBtn">Clear filter log</button>
+    </div>
+  </header>
 
   <div class="toolbar">
-    <select id="filterSelect">
-      <option value="all">All posts</option>
-      <option value="hidden" selected>Hidden only</option>
-      <option value="kept">Kept only</option>
+    <select id="dateRangeSelect">
+      <option value="all">All Time</option>
+      <option value="today">Today</option>
+      <option value="7d" selected>Last 7 Days</option>
+      <option value="30d">Last 30 Days</option>
     </select>
-    <input type="text" id="search" placeholder="Search post text or reason..." />
-    <button class="secondary" id="clearBtn">Clear log</button>
+    <select id="statusSelect">
+      <option value="all">All Decisions</option>
+      <option value="hidden">Hidden only</option>
+      <option value="kept">Kept only</option>
+      <option value="saved">Saved to Brain only</option>
+    </select>
+    <select id="topicSelect">
+      <option value="">All Topics</option>
+    </select>
+    <select id="providerSelect">
+      <option value="all">All Providers</option>
+      <option value="openai">OpenAI</option>
+      <option value="gemini">Gemini</option>
+      <option value="claude">Claude</option>
+    </select>
+    <input type="text" id="searchInput" placeholder="Search excerpt, reason, topic, or model..." />
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th style="width:80px;">Status</th>
-        <th>Post excerpt</th>
-        <th style="width:180px;">Reason</th>
-        <th style="width:110px;">Time</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div class="empty" id="emptyState" style="display:none;">No entries yet — browse LinkedIn with rules set to populate this.</div>
+  <div class="stats-grid" id="statsGrid"></div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Activity & Filtering Trends</div>
+        <div class="chart-legend">
+          <div class="legend-item"><div class="legend-color" style="background:#0a66c2;"></div> Total</div>
+          <div class="legend-item"><div class="legend-color" style="background:#2a7a34;"></div> Kept</div>
+          <div class="legend-item"><div class="legend-color" style="background:#d11;"></div> Hidden</div>
+          <div class="legend-item"><div class="legend-color" style="background:#7c3aed;"></div> Saved</div>
+        </div>
+      </div>
+      <div id="trendChartContainer"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Top Topics Extracted</div>
+      </div>
+      <div id="topicChartContainer"></div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <div class="section-title">Topic Performance Breakdown</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Topic</th>
+          <th style="width:120px;">Occurrences</th>
+          <th style="width:120px;">Hide Rate</th>
+          <th style="width:120px;">Save Rate</th>
+        </tr>
+      </thead>
+      <tbody id="topicRows"></tbody>
+    </table>
+    <div class="empty" id="topicEmptyState" style="display:none;">No topic statistics available for this filter.</div>
+  </div>
+
+  <div class="section-card">
+    <div class="section-title">Detailed Decision Log</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:80px;">Status</th>
+          <th>Post excerpt</th>
+          <th style="width:160px;">Topics</th>
+          <th style="width:160px;">Reason</th>
+          <th style="width:75px;">Saved?</th>
+          <th style="width:105px;">Time</th>
+        </tr>
+      </thead>
+      <tbody id="decisionRows"></tbody>
+    </table>
+    <div class="empty" id="decisionEmptyState" style="display:none;">No matching decision logs found.</div>
+  </div>
 
   <script type="module" src="dashboard.js"></script>
 </body>

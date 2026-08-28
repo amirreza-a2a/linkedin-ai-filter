@@ -12,14 +12,18 @@ export async function appendLogEntries(entries) {
   const { [LOG_KEY]: log = {} } = await chrome.storage.local.get([LOG_KEY]);
   for (const entry of entries) {
     log[entry.id] = {
-      id: entry.id,
-      textSnippet: entry.textSnippet,
+      id: String(entry.id || "").trim(),
+      textSnippet: String(entry.textSnippet || "").trim().slice(0, 200),
       hide: entry.hide === true,
       reason: typeof entry.reason === "string" ? entry.reason : "",
-      topics: Array.isArray(entry.topics) ? entry.topics : [],
-      provider: entry.provider,
-      rulesText: entry.rulesText,
-      ts: entry.ts || Date.now(),
+      topics: Array.isArray(entry.topics) ? entry.topics.filter((t) => typeof t === "string") : [],
+      saved: entry.saved === true,
+      saveReason: typeof entry.saveReason === "string" ? entry.saveReason : "",
+      autoSaved: entry.autoSaved === true,
+      provider: typeof entry.provider === "string" ? entry.provider : "",
+      model: typeof entry.model === "string" ? entry.model : "",
+      rulesText: typeof entry.rulesText === "string" ? entry.rulesText : "",
+      ts: typeof entry.ts === "number" && !isNaN(entry.ts) ? entry.ts : Date.now(),
     };
   }
 
@@ -41,9 +45,18 @@ export async function getLogEntries() {
     .sort((a, b) => b.ts - a.ts)
     .map((e) => ({
       ...e,
+      id: String(e.id || ""),
+      textSnippet: String(e.textSnippet || ""),
       hide: e.hide === true,
       reason: e.reason || "",
       topics: Array.isArray(e.topics) ? e.topics : [],
+      saved: e.saved === true,
+      saveReason: e.saveReason || "",
+      autoSaved: e.autoSaved === true,
+      provider: e.provider || "openai",
+      model: e.model || "",
+      rulesText: e.rulesText || "",
+      ts: typeof e.ts === "number" && !isNaN(e.ts) ? e.ts : Date.now(),
     }));
 }
 

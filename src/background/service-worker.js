@@ -62,7 +62,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       savePost({
         ...message.post,
-        autoSaved: Boolean(message.post.autoSaved),
+        autoSaved: message.post.autoSaved === true,
         saveReason: message.post.saveReason || "Manual save",
       })
         .then((savedPost) => sendResponse({ ok: true, post: savedPost }))
@@ -100,7 +100,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function logResults(posts, results, provider, rulesText) {
+async function logResults(posts, results, provider, model, rulesText) {
   const byId = new Map(posts.map((p) => [String(p.id), p]));
   const entries = [];
   for (const r of results) {
@@ -112,7 +112,11 @@ async function logResults(posts, results, provider, rulesText) {
       hide: r.hide === true,
       reason: r.reason || "",
       topics: Array.isArray(r.topics) ? r.topics : [],
+      saved: r.saved === true,
+      saveReason: r.saveReason || "",
+      autoSaved: r.autoSaved === true,
       provider,
+      model,
       rulesText,
     });
   }
@@ -124,7 +128,14 @@ async function logResults(posts, results, provider, rulesText) {
 async function handleClassify(posts) {
   const settings = await getSettings();
 
-  if (!settings.enabled || !settings.rulesText?.trim()) {
+  const provider = settings.provider || "openai";
+  const model = settings.model?.[provider] || "";
+  const rulesText = settings.rulesText || "";
+  const saveRulesText = settings.saveRulesText || "";
+  const baseUrl = settings.baseUrl?.[provider] || "";
+  const apiKey = settings.apiKeys?.[provider] || "";
+
+  if (!settings.enabled || !rulesText.trim()) {
     const results = posts.map((p) => ({
       id: p.id,
       hide: false,
@@ -134,16 +145,9 @@ async function handleClassify(posts) {
       saveReason: "",
       autoSaved: false,
     }));
-    await logResults(posts, results, settings.provider, settings.rulesText);
+    await logResults(posts, results, provider, model, rulesText);
     return results;
   }
-
-  const provider = settings.provider || "openai";
-  const model = settings.model?.[provider] || "";
-  const rulesText = settings.rulesText || "";
-  const saveRulesText = settings.saveRulesText || "";
-  const baseUrl = settings.baseUrl?.[provider] || "";
-  const apiKey = settings.apiKeys?.[provider] || "";
 
   // Check cache first in a single batch read using isolated cache keys
   const results = new Array(posts.length);
@@ -261,6 +265,6 @@ async function handleClassify(posts) {
     await savePostsBatch(postsToAutoSave);
   }
 
-  await logResults(posts, results, settings.provider, settings.rulesText);
+  await logResults(posts, results, provider, model, rulesText);
   return results;
 }
