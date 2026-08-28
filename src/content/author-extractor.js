@@ -105,12 +105,17 @@ function isDisqualifiedElement(el) {
 
 /**
  * Extracts explicit post author metadata from container accessibility labels if present.
- * e.g., aria-label="Feed post by Armin Daraei" or aria-label="Post by Alice"
+ * Covers:
+ * - aria-label="Open control menu for post by Armin Daraei"
+ * - aria-label="Hide post by Armin Daraei"
+ * - aria-label="Feed post by Armin Daraei"
+ * - aria-label="Post by Armin Daraei"
+ * - aria-label="Update by Armin Daraei"
  *
  * @param {Element} root
  * @returns {string} Clean author name from metadata or ""
  */
-function extractExplicitAuthorMetadata(root) {
+export function extractExplicitAuthorMetadata(root) {
   if (!root || typeof root.getAttribute !== "function") return "";
 
   const ariaLabels = [];
@@ -126,7 +131,7 @@ function extractExplicitAuthorMetadata(root) {
   }
 
   for (const label of ariaLabels) {
-    const match = label.match(/(?:Feed\s+)?(?:post|update)\s+by\s+([^,.;\n]+)/i);
+    const match = label.match(/\b(?:post|update)\s+by\s+([^,.;\n]+)/i);
     if (match && match[1]) {
       const clean = cleanAuthorName(match[1]);
       if (clean) return clean;
@@ -149,7 +154,7 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
     return { author: "", authorUrl: "" };
   }
 
-  // 1. Extract explicit metadata signal if present
+  // 1. Extract explicit metadata signal if present (e.g. control menu / post label)
   const explicitAuthorName = extractExplicitAuthorMetadata(el);
 
   // 2. Locate and rank all candidate profile anchors in the post
@@ -182,7 +187,7 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       if (seenUrls.has(sanitizedHref)) continue;
       seenUrls.add(sanitizedHref);
 
-      // Check disqualification
+      // Check disqualification (social headers, comments, etc.)
       if (isDisqualifiedElement(a)) continue;
 
       // Score this candidate
@@ -203,7 +208,11 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       );
       if (inActorMeta) score += 50;
 
-      if (a.classList?.contains?.("update-components-actor__image") || a.classList?.contains?.("feed-shared-actor__container-link")) {
+      if (
+        a.classList?.contains?.("update-components-actor__image") ||
+        a.classList?.contains?.("feed-shared-actor__container-link") ||
+        a.classList?.contains?.("update-components-actor__container-link")
+      ) {
         score += 40;
       }
 
@@ -214,7 +223,11 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
       const cleanText = cleanAuthorName(text);
 
       if (explicitAuthorName) {
-        if (cleanAria.toLowerCase() === explicitAuthorName.toLowerCase() || cleanText.toLowerCase() === explicitAuthorName.toLowerCase()) {
+        if (
+          cleanAria.toLowerCase() === explicitAuthorName.toLowerCase() ||
+          cleanText.toLowerCase() === explicitAuthorName.toLowerCase() ||
+          sanitizedHref.toLowerCase().includes(explicitAuthorName.toLowerCase().replace(/\s+/g, ""))
+        ) {
           score += 200;
         }
       }
