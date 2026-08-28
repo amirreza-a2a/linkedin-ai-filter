@@ -3,16 +3,16 @@
 // Zero external dependencies. Uses deterministic initial placement.
 
 export const PHYSICS_PRESETS = {
-  compact: { repulsion: 800, springLength: 60, gravity: 0.04 },
-  balanced: { repulsion: 1400, springLength: 95, gravity: 0.02 },
-  spread: { repulsion: 2400, springLength: 150, gravity: 0.01 },
+  compact: { repulsion: 400, springLength: 45, gravity: 0.05 },
+  balanced: { repulsion: 900, springLength: 75, gravity: 0.025 },
+  spread: { repulsion: 2000, springLength: 130, gravity: 0.01 },
 };
 
 export class ForceLayout {
   constructor(options = {}) {
     this.repulsion = options.repulsion ?? PHYSICS_PRESETS.balanced.repulsion;
     this.springLength = options.springLength ?? PHYSICS_PRESETS.balanced.springLength;
-    this.springStrength = options.springStrength ?? 0.05;
+    this.springStrength = options.springStrength ?? 0.06;
     this.gravity = options.gravity ?? PHYSICS_PRESETS.balanced.gravity;
     this.damping = options.damping ?? 0.85;
     this.alphaDecay = options.alphaDecay ?? 0.97;
@@ -35,10 +35,10 @@ export class ForceLayout {
    * @param {number} [params.gravity]
    */
   setPhysics({ repulsion, springLength, gravity } = {}) {
-    if (typeof repulsion === "number") this.repulsion = repulsion;
-    if (typeof springLength === "number") this.springLength = springLength;
-    if (typeof gravity === "number") this.gravity = gravity;
-    this.reheat(0.3);
+    if (typeof repulsion === "number" && !isNaN(repulsion)) this.repulsion = repulsion;
+    if (typeof springLength === "number" && !isNaN(springLength)) this.springLength = springLength;
+    if (typeof gravity === "number" && !isNaN(gravity)) this.gravity = gravity;
+    this.reheat(0.4);
   }
 
   /**
@@ -75,7 +75,7 @@ export class ForceLayout {
     const cx = width / 2;
     const cy = height / 2;
     const n = graphNodes.length;
-    const radius = Math.min(width, height) * 0.35;
+    const radius = Math.min(width, height) * 0.28;
 
     this.nodes = graphNodes.map((node, i) => {
       // Deterministic initial circle placement
@@ -146,7 +146,7 @@ export class ForceLayout {
       }
     }
 
-    // 2. Attractive spring forces along edges
+    // 2. Attractive/restoring spring forces along edges (Hooke's Law)
     for (const edge of this.edges) {
       const u = edge.sourceNode;
       const v = edge.targetNode;
@@ -155,18 +155,21 @@ export class ForceLayout {
       let dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 0.1) dist = 0.1;
 
+      // Displacement from natural spring length
       const displacement = dist - this.springLength;
       const force = displacement * this.springStrength * this.alpha;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
 
+      // u moves in direction +fx, +fy (toward v if stretched)
       if (!u.pinned) {
         u.vx += fx;
         u.vy += fy;
       }
+      // v moves in opposite direction -fx, -fy (toward u if stretched)
       if (!v.pinned) {
-        v.vx += fx;
-        v.vy += fy;
+        v.vx -= fx;
+        v.vy -= fy;
       }
     }
 
@@ -189,7 +192,7 @@ export class ForceLayout {
     return this.alpha < this.alphaMin;
   }
 
-  reheat(newAlpha = 0.3) {
+  reheat(newAlpha = 0.4) {
     this.alpha = Math.max(this.alpha, newAlpha);
   }
 
@@ -201,7 +204,7 @@ export class ForceLayout {
       node.vx = 0;
       node.vy = 0;
       node.pinned = pinned;
-      this.reheat(0.15);
+      this.reheat(0.2);
     }
   }
 
@@ -209,7 +212,7 @@ export class ForceLayout {
     const node = this.nodeMap.get(nodeId);
     if (node) {
       node.pinned = false;
-      this.reheat(0.1);
+      this.reheat(0.15);
     }
   }
 }

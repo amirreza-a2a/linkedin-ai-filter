@@ -224,27 +224,118 @@ test("extractNeighborhood - extracts focused subgraphs for post, topic, and auth
   assert.ok(!authorFocus.nodes.some((n) => n.id === "post:p1"));
 });
 
-test("ForceLayout - physics presets and reset", () => {
+test("ForceLayout - physics presets and ordering", () => {
   const layout = new ForceLayout();
 
-  // 1. Balanced (default)
+  // 1. Preset ordering invariants
+  assert.ok(PHYSICS_PRESETS.compact.springLength < PHYSICS_PRESETS.balanced.springLength);
+  assert.ok(PHYSICS_PRESETS.balanced.springLength < PHYSICS_PRESETS.spread.springLength);
+
+  assert.ok(PHYSICS_PRESETS.compact.repulsion < PHYSICS_PRESETS.balanced.repulsion);
+  assert.ok(PHYSICS_PRESETS.balanced.repulsion < PHYSICS_PRESETS.spread.repulsion);
+
+  assert.ok(PHYSICS_PRESETS.compact.gravity > PHYSICS_PRESETS.balanced.gravity);
+  assert.ok(PHYSICS_PRESETS.balanced.gravity > PHYSICS_PRESETS.spread.gravity);
+
+  // 2. Balanced (default)
   assert.equal(layout.repulsion, PHYSICS_PRESETS.balanced.repulsion);
   assert.equal(layout.springLength, PHYSICS_PRESETS.balanced.springLength);
 
-  // 2. Apply Compact preset
+  // 3. Apply Compact preset
   layout.applyPreset("compact");
   assert.equal(layout.repulsion, PHYSICS_PRESETS.compact.repulsion);
   assert.equal(layout.springLength, PHYSICS_PRESETS.compact.springLength);
   assert.equal(layout.gravity, PHYSICS_PRESETS.compact.gravity);
 
-  // 3. Apply Spread preset
+  // 4. Apply Spread preset
   layout.applyPreset("spread");
   assert.equal(layout.repulsion, PHYSICS_PRESETS.spread.repulsion);
   assert.equal(layout.springLength, PHYSICS_PRESETS.spread.springLength);
 
-  // 4. Reset physics
+  // 5. Reset physics
   layout.resetPhysics();
   assert.equal(layout.repulsion, PHYSICS_PRESETS.balanced.repulsion);
+});
+
+test("ForceLayout - spring force direction for stretched and compressed edges", () => {
+  const layout = new ForceLayout({
+    repulsion: 0, // Isolate spring force
+    gravity: 0,
+    springLength: 100,
+    springStrength: 0.1,
+    alphaDecay: 1.0,
+  });
+
+  const nodes = [
+    { id: "u", type: "post" },
+    { id: "v", type: "topic" },
+  ];
+  const edges = [
+    { id: "e1", source: "u", target: "v", type: "has-topic" },
+  ];
+
+  layout.init(nodes, edges, 800, 600);
+  const u = layout.nodeMap.get("u");
+  const v = layout.nodeMap.get("v");
+
+  // 1. STRETCHED SPRING: dist = 200 > springLength (100)
+  u.x = 300;
+  u.y = 300;
+  u.vx = 0;
+  u.vy = 0;
+
+  v.x = 500;
+  v.y = 300;
+  v.vx = 0;
+  v.vy = 0;
+
+  layout.tick();
+
+  // u should move TOWARD v (positive x)
+  assert.ok(u.vx > 0, `Expected u.vx > 0 but got ${u.vx}`);
+  // v should move TOWARD u (negative x)
+  assert.ok(v.vx < 0, `Expected v.vx < 0 but got ${v.vx}`);
+
+  // 2. COMPRESSED SPRING: dist = 40 < springLength (100)
+  u.x = 380;
+  u.y = 300;
+  u.vx = 0;
+  u.vy = 0;
+
+  v.x = 420;
+  v.y = 300;
+  v.vx = 0;
+  v.vy = 0;
+
+  layout.tick();
+
+  // u should move AWAY from v (negative x)
+  assert.ok(u.vx < 0, `Expected u.vx < 0 but got ${u.vx}`);
+  // v should move AWAY from u (positive x)
+  assert.ok(v.vx > 0, `Expected v.vx > 0 but got ${v.vx}`);
+});
+
+test("ForceLayout - live parameter changes diverge from previous trajectory", () => {
+  const posts = [
+    { id: "p1", text: "Post 1", author: "Alice", topics: ["AI"] },
+    { id: "p2", text: "Post 2", author: "Bob", topics: ["AI"] },
+  ];
+  const graph = buildKnowledgeGraph(posts);
+
+  const layout = new ForceLayout();
+  layout.init(graph.nodes, graph.edges, 800, 600);
+
+  // Run 10 ticks under Balanced
+  for (let i = 0; i < 10; i++) layout.tick();
+  const baselineX = layout.nodes[0].x;
+
+  // Apply Spread preset live
+  layout.applyPreset("spread");
+  for (let i = 0; i < 10; i++) layout.tick();
+  const spreadX = layout.nodes[0].x;
+
+  // Node position diverged under spread parameters
+  assert.notEqual(baselineX, spreadX);
 });
 
 test("ForceLayout - deterministic circular initialization and physics convergence", () => {

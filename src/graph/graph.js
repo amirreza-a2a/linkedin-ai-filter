@@ -363,24 +363,27 @@ togglePhysicsBtn.addEventListener("click", () => {
   physicsPanel.classList.toggle("open");
 });
 
+function clearActivePresetButtons() {
+  document.querySelectorAll(".preset-btn").forEach((b) => b.classList.remove("active"));
+}
+
 densitySlider.addEventListener("input", () => {
   layout.setPhysics({ repulsion: parseInt(densitySlider.value, 10) });
   clearActivePresetButtons();
+  if (renderer) renderer.requestRender();
 });
 
 spacingSlider.addEventListener("input", () => {
   layout.setPhysics({ springLength: parseInt(spacingSlider.value, 10) });
   clearActivePresetButtons();
+  if (renderer) renderer.requestRender();
 });
 
 gravitySlider.addEventListener("input", () => {
   layout.setPhysics({ gravity: parseInt(gravitySlider.value, 10) / 1000 });
   clearActivePresetButtons();
+  if (renderer) renderer.requestRender();
 });
-
-function clearActivePresetButtons() {
-  document.querySelectorAll(".preset-btn").forEach((b) => b.classList.remove("active"));
-}
 
 document.querySelectorAll(".preset-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -392,6 +395,7 @@ document.querySelectorAll(".preset-btn").forEach((btn) => {
     gravitySlider.value = Math.round(p.gravity * 1000);
     clearActivePresetButtons();
     btn.classList.add("active");
+    if (renderer) renderer.requestRender();
   });
 });
 
@@ -403,6 +407,7 @@ resetPhysicsBtn.addEventListener("click", () => {
   gravitySlider.value = Math.round(p.gravity * 1000);
   clearActivePresetButtons();
   document.querySelector('.preset-btn[data-preset="balanced"]')?.classList.add("active");
+  if (renderer) renderer.requestRender();
 });
 
 if (toggleSidebarBtn) {
