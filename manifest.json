@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FeedRule — Custom AI Filter for LinkedIn",
   "version": "0.1.0",
-  "description": "Describe in plain English what you want hidden from your LinkedIn feed. Uses your own OpenAI/Gemini/Claude API key.",
+  "description": "Describe in plain English what you want hidden from your LinkedIn feed. Uses your own OpenAI/Gemini/Claude API key or local LLM.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -13,7 +13,17 @@
     "https://www.linkedin.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",
-    "https://api.anthropic.com/*"
+    "https://api.anthropic.com/*",
+    "https://openrouter.ai/*",
+    "https://api.groq.com/*",
+    "https://api.deepseek.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",

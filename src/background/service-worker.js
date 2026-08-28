@@ -50,13 +50,6 @@ async function handleClassify(posts) {
     return results;
   }
 
-  const apiKey = settings.apiKeys?.[settings.provider];
-  if (!apiKey) {
-    const results = posts.map((p) => ({ id: p.id, hide: false, reason: "no-api-key" }));
-    await logResults(posts, results, settings.provider, settings.rulesText);
-    return results;
-  }
-
   // Check cache first, only send uncached posts to the API
   const results = new Array(posts.length);
   const uncached = [];
@@ -88,10 +81,14 @@ async function handleClassify(posts) {
   }
 
   const classifyFn = getProviderFn(settings.provider);
-  const model = settings.model[settings.provider];
+  const model = settings.model?.[settings.provider];
+  const baseUrl = settings.baseUrl?.[settings.provider] || "";
+  const apiKey = settings.apiKeys?.[settings.provider] || "";
+
   const apiResults = await classifyFn({
     apiKey,
     model,
+    baseUrl,
     rulesText: settings.rulesText,
     posts: uncached.map((u) => u.post),
   });

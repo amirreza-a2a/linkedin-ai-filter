@@ -1,0 +1,9 @@
+{
+  "name": "linkedin-ai-filter",
+  "version": "0.1.0",
+  "description": "Custom AI Filter for LinkedIn Chrome Extension",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

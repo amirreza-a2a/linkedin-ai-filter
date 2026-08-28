@@ -11,6 +11,11 @@ const DEFAULTS = {
     gemini: "gemini-3.5-flash",
     claude: "claude-haiku-4-5-20251001",
   },
+  baseUrl: {
+    openai: "",
+    gemini: "",
+    claude: "",
+  },
   dailyCallCap: 500, // safety guardrail, requests not tokens
 };
 
@@ -20,6 +25,7 @@ export async function getSettings() {
     "rulesText",
     "provider",
     "model",
+    "baseUrl",
     "dailyCallCap",
   ]);
   const local = await chrome.storage.local.get(["apiKeys"]);
@@ -28,6 +34,7 @@ export async function getSettings() {
     rulesText: synced.rulesText ?? DEFAULTS.rulesText,
     provider: synced.provider ?? DEFAULTS.provider,
     model: { ...DEFAULTS.model, ...(synced.model || {}) },
+    baseUrl: { ...DEFAULTS.baseUrl, ...(synced.baseUrl || {}) },
     dailyCallCap: synced.dailyCallCap ?? DEFAULTS.dailyCallCap,
     apiKeys: local.apiKeys || {}, // { openai: "...", gemini: "...", claude: "..." }
   };

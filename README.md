@@ -2,8 +2,8 @@
 
 A Chrome extension that filters your LinkedIn feed using AI, driven by
 plain-English rules you write yourself (not a fixed list of categories).
-Uses your own OpenAI, Gemini, or Claude API key — nothing goes through a
-third-party server.
+Uses your own OpenAI, Gemini, or Claude API key — or a local LLM (Ollama, LM Studio) — nothing goes through a
+third-party tracking server.
 
 ## Load it in Chrome (dev mode)
 
@@ -11,13 +11,25 @@ third-party server.
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked**
 4. Select this folder (`linkedin-ai-filter/`)
-5. Click the extension icon → **API key & model settings** → paste your key
+5. Click the extension icon → **API key & model settings** → configure your provider, key, or local Base URL
 6. Click the extension icon → type your rules, e.g.:
    > Hide: recruiter spam, humble-brag posts, crypto/finance ads. Keep anything about AI or semiconductors.
 7. Go to linkedin.com and refresh — matching posts collapse with a
    "Hidden by your filter" placeholder (click "Show anyway" to expand).
 8. Click the extension icon → **View filter dashboard →** to see stats and
    a searchable log of every post that's been hidden or kept.
+
+## Custom Base URLs & Local Models
+
+FeedRule supports custom Base URLs across providers in Settings:
+
+- **Local Inference (Zero External API Keys / Full Privacy)**:
+  - **Ollama**: Base URL `http://localhost:11434/v1`, Model `llama3.2` (API key can be left empty).
+  - **LM Studio**: Base URL `http://localhost:1234/v1`, Model `your-local-model` (API key can be left empty).
+- **OpenAI-Compatible Gateways**:
+  - **OpenRouter**: Base URL `https://openrouter.ai/api/v1`, Model `anthropic/claude-3.5-sonnet` (or any OpenRouter model).
+  - **Groq**: Base URL `https://api.groq.com/openai/v1`, Model `llama-3.3-70b-versatile`.
+  - **DeepSeek**: Base URL `https://api.deepseek.com/v1`, Model `deepseek-chat`.
 
 ## Dashboard
 
@@ -41,7 +53,7 @@ recent 500 posts, stored in `chrome.storage.local`.
    which classifies each post as hide/keep against your rules.
 5. The content script applies the decision to the DOM.
 
-**Fails open everywhere**: missing key, API error, unparseable response,
+**Fails open everywhere**: missing key on authenticated endpoints, API error, unparseable response,
 or daily cap reached → posts stay visible rather than being hidden.
 
 ## Project structure
@@ -50,6 +62,9 @@ or daily cap reached → posts stay visible rather than being hidden.
 linkedin-ai-filter/
 ├── manifest.json
 ├── icons/
+├── test/                      # automated unit test suite
+│   ├── url-helper.test.js
+│   └── providers.test.js
 └── src/
     ├── content/
     │   ├── content-index.js   # feed watcher + DOM filtering (plain script, no bundler needed)
@@ -58,24 +73,18 @@ linkedin-ai-filter/
     │   └── service-worker.js  # batches, caches, calls the LLM provider
     ├── llm/
     │   ├── provider-base.js   # shared prompt + response parsing
+    │   ├── url-helper.js      # URL validation, normalization, and endpoint resolution
     │   ├── factory.js
     │   ├── openai-provider.js
     │   ├── gemini-provider.js
     │   └── claude-provider.js
     ├── popup/                 # rules editor, on/off toggle
-    ├── options/                # API keys, model choice, daily call cap
-    ├── dashboard/              # stats + searchable log of filtered posts
+    ├── options/               # API keys, Base URLs, model choice, daily call cap
+    ├── dashboard/             # stats + searchable log of filtered posts
     └── storage/
         ├── rules-store.js     # chrome.storage wrapper + decision cache
         └── log-store.js       # rolling log of every decision, for the dashboard
 ```
-
-Note: `content-index.js` intentionally has no `import`/`export` statements —
-Chrome content scripts don't reliably support static ES module imports
-without a bundler, so all of its logic lives in one plain file. The
-background service worker and the popup/options pages *do* use ES modules
-(`"type": "module"` in the manifest for the worker; `<script type="module">`
-in the HTML for the pages), since those contexts support it natively.
 
 ## Known limitations (v1 / MVP)
 
@@ -96,9 +105,3 @@ in the HTML for the pages), since those contexts support it natively.
   is a basic safety guardrail (call count, not token count).
 - Firefox/Edge: MV3 is supported by both, but this hasn't been tested there
   yet — expect minor manifest tweaks.
-
-## Next steps (not built yet)
-
-- Job-feed-specific filtering
-- Per-provider cost/usage display in the popup
-- Firefox/Edge packaging

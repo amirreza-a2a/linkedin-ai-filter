@@ -1,15 +1,21 @@
 // src/llm/openai-provider.js
 import { buildClassificationPrompt, parseClassificationResponse } from "./provider-base.js";
+import { resolveProviderEndpoint } from "./url-helper.js";
 
-export async function classifyBatch({ apiKey, model, rulesText, posts }) {
+export async function classifyBatch({ apiKey, model, baseUrl, rulesText, posts }) {
   const prompt = buildClassificationPrompt(rulesText, posts);
+  const endpoint = resolveProviderEndpoint("openai", baseUrl, model);
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  if (apiKey && apiKey.trim()) {
+    headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+  }
+
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: model || "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
