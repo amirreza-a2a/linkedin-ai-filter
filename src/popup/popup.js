@@ -26,6 +26,11 @@ enabledEl.addEventListener("change", async () => {
   await setSettings({ enabled: enabledEl.checked });
 });
 
+document.getElementById("openGraph").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
+});
+
 document.getElementById("openSaved").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.tabs.create({ url: chrome.runtime.getURL("src/saved/saved.html") });

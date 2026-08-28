@@ -23,7 +23,7 @@
     }
     h1 { font-size: 22px; font-weight: 600; color: #0a66c2; }
     .subtitle { color: #666; font-size: 13px; margin-top: 2px; }
-    .header-actions { display: flex; gap: 8px; }
+    .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
     .btn {
       padding: 7px 14px;
@@ -140,6 +140,7 @@
       <div class="subtitle">Retained filter and save decisions (rolling 500 max), most recent first.</div>
     </div>
     <div class="header-actions">
+      <a class="btn" href="src/graph/graph.html" id="openGraphBtn">🕸️ Knowledge Graph</a>
       <a class="btn" href="src/saved/saved.html" id="openBrainBtn">🧠 Second Brain</a>
       <button class="btn btn-secondary" id="clearBtn">Clear filter log</button>
     </div>

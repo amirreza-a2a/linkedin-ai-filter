@@ -8,6 +8,7 @@ const statsBar = document.getElementById("statsBar");
 const postsList = document.getElementById("postsList");
 const exportMdBtn = document.getElementById("exportMdBtn");
 const exportJsonBtn = document.getElementById("exportJsonBtn");
+const openGraphBtn = document.getElementById("openGraphBtn");
 
 let allPosts = [];
 
@@ -148,6 +149,13 @@ exportJsonBtn.addEventListener("click", () => {
   const filename = `linkedin-second-brain-${new Date().toISOString().slice(0, 10)}.json`;
   downloadFile(filename, json, "application/json;charset=utf-8");
 });
+
+if (openGraphBtn) {
+  openGraphBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
+  });
+}
 
 searchInput.addEventListener("input", filterAndRender);
 topicSelect.addEventListener("change", filterAndRender);

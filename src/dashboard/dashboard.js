@@ -19,6 +19,7 @@ const providerSelect = document.getElementById("providerSelect");
 const searchInput = document.getElementById("searchInput");
 const clearBtn = document.getElementById("clearBtn");
 const openBrainBtn = document.getElementById("openBrainBtn");
+const openGraphBtn = document.getElementById("openGraphBtn");
 
 let allLogs = [];
 let activeSettings = {};
@@ -177,6 +178,13 @@ if (openBrainBtn) {
   openBrainBtn.addEventListener("click", (e) => {
     e.preventDefault();
     chrome.tabs.create({ url: chrome.runtime.getURL("src/saved/saved.html") });
+  });
+}
+
+if (openGraphBtn) {
+  openGraphBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
   });
 }
 

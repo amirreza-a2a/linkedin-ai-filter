@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>FeedRule — Knowledge Graph</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: white;
+      border-bottom: 1px solid #e2e8f0;
+      z-index: 10;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #0a66c2;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .search-input {
+      padding: 6px 12px;
+      font-size: 12.5px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      width: 220px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn {
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 14px;
+      border: 1px solid #0a66c2;
+      background: white;
+      color: #0a66c2;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      transition: background .15s;
+    }
+    .btn:hover { background: #ebf4fd; }
+    .btn-secondary { border-color: #cbd5e1; color: #475569; }
+    .btn-secondary:hover { background: #f1f5f9; }
+
+    .main-layout {
+      display: flex;
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      background: #f8fafc;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .legend {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(4px);
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11.5px;
+      color: #475569;
+      pointer-events: none;
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .dot-post { background: #0a66c2; }
+    .dot-topic { background: #10b981; }
+    .dot-author { background: #f59e0b; }
+
+    .sidebar {
+      width: 360px;
+      background: white;
+      border-left: 1px solid #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: -2px 0 6px rgba(0,0,0,0.03);
+    }
+    .sidebar-header {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1e293b;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-topic { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; margin-right: 4px; margin-bottom: 4px; }
+    .badge-author { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+    .detail-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 14px;
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .detail-card strong { color: #334155; }
+    .detail-text {
+      margin-top: 8px;
+      color: #1e293b;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12.5px;
+      max-height: 250px;
+      overflow-y: auto;
+    }
+    .link {
+      color: #0a66c2;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .link:hover { text-decoration: underline; }
+
+    .connected-list {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .connected-item {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .connected-item:hover {
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+    }
+
+    .empty-prompt {
+      color: #64748b;
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: center;
+      padding: 40px 10px;
+    }
+    .empty-state-overlay {
+      position: absolute;
+      inset: 0;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      text-align: center;
+      color: #64748b;
+      z-index: 5;
+    }
+    .empty-state-overlay h2 {
+      font-size: 18px;
+      color: #1e293b;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>🕸️ Knowledge Graph</h1>
+      <input type="text" class="search-input" id="searchGraph" placeholder="Search node label..." />
+      <button class="btn btn-secondary" id="resetViewBtn">Reset View</button>
+    </div>
+    <div class="header-actions">
+      <a class="btn" href="src/saved/saved.html" id="openBrainBtn">🧠 Second Brain</a>
+      <a class="btn btn-secondary" href="src/dashboard/dashboard.html" id="openDashboardBtn">📊 Analytics</a>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <div class="canvas-container">
+      <canvas id="graphCanvas"></canvas>
+      <div class="legend">
+        <div class="legend-row"><div class="dot dot-post"></div> Saved Post</div>
+        <div class="legend-row"><div class="dot dot-topic"></div> Topic</div>
+        <div class="legend-row"><div class="dot dot-author"></div> Author</div>
+      </div>
+      <div class="empty-state-overlay" id="emptyState" style="display:none;">
+        <h2>No Saved Posts Yet</h2>
+        <p>Posts saved in your Second Brain will automatically form your Knowledge Graph.</p>
+      </div>
+    </div>
+
+    <div class="sidebar" id="sidebar">
+      <div class="empty-prompt">
+        <p>💡 Click any node on the graph to inspect its relationships and details.</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="graph.js"></script>
+</body>
+</html>
