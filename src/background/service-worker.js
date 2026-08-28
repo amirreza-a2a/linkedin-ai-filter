@@ -2,35 +2,49 @@
 import { getProviderFn } from "../llm/factory.js";
 import {
   getSettings,
-  getCachedDecision,
-  setCachedDecision,
+  getCachedDecisions,
+  setCachedDecisions,
   incrementAndCheckDailyCap,
   simpleHash,
 } from "../storage/rules-store.js";
-import { appendLogEntry } from "../storage/log-store.js";
+import { appendLogEntries } from "../storage/log-store.js";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "CLASSIFY_POSTS") return false;
-  handleClassify(message.posts)
-    .then((results) => sendResponse({ ok: true, results }))
+
+  const posts = Array.isArray(message.posts) ? message.posts : [];
+
+  handleClassify(posts)
+    .then((results) => {
+      try {
+        sendResponse({ ok: true, results });
+      } catch (err) {
+        console.warn("[FeedRule] sendResponse failed:", err);
+      }
+    })
     .catch((err) => {
       console.error("[FeedRule] classify failed:", err);
-      // Fail open: never hide posts because of an error
-      sendResponse({
-        ok: false,
-        error: String(err),
-        results: message.posts.map((p) => ({ id: p.id, hide: false, reason: "error-fail-open" })),
-      });
+      try {
+        sendResponse({
+          ok: false,
+          error: String(err),
+          results: posts.map((p) => ({ id: p.id, hide: false, reason: "error-fail-open" })),
+        });
+      } catch (sendErr) {
+        console.warn("[FeedRule] sendResponse catch failed:", sendErr);
+      }
     });
+
   return true; // keep the message channel open for async sendResponse
 });
 
 async function logResults(posts, results, provider, rulesText) {
   const byId = new Map(posts.map((p) => [String(p.id), p]));
+  const entries = [];
   for (const r of results) {
     const post = byId.get(String(r.id));
     if (!post) continue;
-    await appendLogEntry({
+    entries.push({
       id: r.id,
       textSnippet: post.text.slice(0, 200),
       hide: r.hide,
@@ -38,6 +52,9 @@ async function logResults(posts, results, provider, rulesText) {
       provider,
       rulesText,
     });
+  }
+  if (entries.length > 0) {
+    await appendLogEntries(entries);
   }
 }
 
@@ -50,15 +67,16 @@ async function handleClassify(posts) {
     return results;
   }
 
-  // Check cache first, only send uncached posts to the API
+  // Check cache first in a single batch read
   const results = new Array(posts.length);
   const uncached = [];
   const hashes = await Promise.all(
     posts.map((p) => simpleHash(`${settings.rulesText}::${p.text}`))
   );
 
+  const cachedMap = await getCachedDecisions(hashes);
   for (let i = 0; i < posts.length; i++) {
-    const cached = await getCachedDecision(hashes[i]);
+    const cached = cachedMap[hashes[i]];
     if (cached) {
       results[i] = { id: posts[i].id, hide: cached.hide, reason: cached.reason };
     } else {
@@ -93,13 +111,17 @@ async function handleClassify(posts) {
     posts: uncached.map((u) => u.post),
   });
 
-  const byId = new Map(apiResults.map((r) => [String(r.id), r]));
+  const safeResults = Array.isArray(apiResults) ? apiResults : [];
+  const byId = new Map(safeResults.map((r) => [String(r.id), r]));
+  const toCache = {};
+
   for (const { index, post, hash } of uncached) {
     const r = byId.get(String(post.id)) || { hide: false, reason: "missing" };
     results[index] = { id: post.id, hide: r.hide, reason: r.reason };
-    await setCachedDecision(hash, { hide: r.hide, reason: r.reason });
+    toCache[hash] = { hide: r.hide, reason: r.reason };
   }
 
+  await setCachedDecisions(toCache);
   await logResults(posts, results, settings.provider, settings.rulesText);
   return results;
 }

@@ -60,9 +60,31 @@ export async function getCachedDecision(hash) {
   return result[key] || null;
 }
 
+export async function getCachedDecisions(hashes) {
+  if (!hashes || hashes.length === 0) return {};
+  const keys = hashes.map((h) => `cache:${h}`);
+  const result = await chrome.storage.local.get(keys);
+  const out = {};
+  for (const h of hashes) {
+    out[h] = result[`cache:${h}`] || null;
+  }
+  return out;
+}
+
 export async function setCachedDecision(hash, decision) {
   const key = `cache:${hash}`;
   await chrome.storage.local.set({ [key]: { ...decision, ts: Date.now() } });
+}
+
+export async function setCachedDecisions(map) {
+  const toStore = {};
+  const now = Date.now();
+  for (const [hash, decision] of Object.entries(map)) {
+    toStore[`cache:${hash}`] = { ...decision, ts: now };
+  }
+  if (Object.keys(toStore).length > 0) {
+    await chrome.storage.local.set(toStore);
+  }
 }
 
 // --- Daily call counter, resets at local midnight ---

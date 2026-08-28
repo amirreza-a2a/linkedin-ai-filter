@@ -7,24 +7,31 @@
 const LOG_KEY = "decisionLog";
 const MAX_ENTRIES = 500;
 
-export async function appendLogEntry(entry) {
+export async function appendLogEntries(entries) {
+  if (!entries || entries.length === 0) return;
   const { [LOG_KEY]: log = {} } = await chrome.storage.local.get([LOG_KEY]);
-  log[entry.id] = {
-    id: entry.id,
-    textSnippet: entry.textSnippet,
-    hide: entry.hide,
-    reason: entry.reason,
-    provider: entry.provider,
-    rulesText: entry.rulesText,
-    ts: entry.ts || Date.now(),
-  };
+  for (const entry of entries) {
+    log[entry.id] = {
+      id: entry.id,
+      textSnippet: entry.textSnippet,
+      hide: entry.hide,
+      reason: entry.reason,
+      provider: entry.provider,
+      rulesText: entry.rulesText,
+      ts: entry.ts || Date.now(),
+    };
+  }
 
-  const entries = Object.values(log).sort((a, b) => b.ts - a.ts);
-  const trimmed = entries.slice(0, MAX_ENTRIES);
+  const all = Object.values(log).sort((a, b) => b.ts - a.ts);
+  const trimmed = all.slice(0, MAX_ENTRIES);
   const trimmedLog = {};
   for (const e of trimmed) trimmedLog[e.id] = e;
 
   await chrome.storage.local.set({ [LOG_KEY]: trimmedLog });
+}
+
+export async function appendLogEntry(entry) {
+  return appendLogEntries([entry]);
 }
 
 export async function getLogEntries() {

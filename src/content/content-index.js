@@ -123,30 +123,39 @@
   const BATCH_SIZE = 8;
 
   function classifyAndApply(batch) {
+    if (!batch || batch.length === 0) return;
     console.log(
       "[FeedRule] sending batch to background:",
       batch.map((p) => ({ id: p.id, textPreview: p.text.slice(0, 60) }))
     );
     for (const post of batch) elementById.set(post.id, post.el);
 
-    chrome.runtime.sendMessage(
-      {
-        type: "CLASSIFY_POSTS",
-        posts: batch.map((p) => ({ id: p.id, text: p.text })),
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn("[FeedRule] sendMessage error:", chrome.runtime.lastError.message);
-          return;
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: "CLASSIFY_POSTS",
+          posts: batch.map((p) => ({ id: p.id, text: p.text })),
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.warn(
+              "[FeedRule] sendMessage note:",
+              chrome.runtime.lastError.message,
+              "(If you recently reloaded the extension, refresh this page to reconnect)"
+            );
+            return;
+          }
+          console.log("[FeedRule] got response from background:", response);
+          const results = response?.results || [];
+          for (const decision of results) {
+            const el = elementById.get(decision.id);
+            if (el) applyDecision(el, decision);
+          }
         }
-        console.log("[FeedRule] got response from background:", response);
-        const results = response?.results || [];
-        for (const decision of results) {
-          const el = elementById.get(decision.id);
-          if (el) applyDecision(el, decision);
-        }
-      }
-    );
+      );
+    } catch (e) {
+      console.warn("[FeedRule] runtime context unavailable:", e);
+    }
   }
 
   function flush() {
