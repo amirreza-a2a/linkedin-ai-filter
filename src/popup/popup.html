@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>FeedRule</title>
+  <style>
+    body { width: 320px; font-family: -apple-system, Segoe UI, Roboto, sans-serif; padding: 14px; }
+    h1 { font-size: 15px; margin: 0 0 10px; }
+    label { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
+    textarea {
+      width: 100%; height: 90px; box-sizing: border-box; padding: 8px;
+      font-size: 13px; border: 1px solid #ccc; border-radius: 6px; resize: vertical;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
+    .switch { position: relative; width: 38px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; inset: 0; background: #ccc;
+      border-radius: 20px; transition: .2s;
+    }
+    .slider:before {
+      content: ""; position: absolute; height: 16px; width: 16px; left: 2px; bottom: 2px;
+      background: white; border-radius: 50%; transition: .2s;
+    }
+    input:checked + .slider { background: #0a66c2; }
+    input:checked + .slider:before { transform: translateX(18px); }
+    button.primary {
+      width: 100%; padding: 8px; background: #0a66c2; color: white; border: none;
+      border-radius: 16px; font-size: 13px; cursor: pointer; margin-top: 8px;
+    }
+    a.link { font-size: 12px; color: #0a66c2; text-decoration: none; }
+    #status { font-size: 11px; color: #888; margin-top: 6px; height: 14px; }
+  </style>
+</head>
+<body>
+  <h1>FeedRule</h1>
+
+  <div class="row">
+    <label style="margin:0;">Enabled</label>
+    <label class="switch">
+      <input type="checkbox" id="enabledToggle" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <label for="rules">Hide from my feed when the post...</label>
+  <textarea id="rules" placeholder="e.g. Hide: recruiter spam, humble-brag posts, crypto/finance ads. Keep anything about AI or semiconductors."></textarea>
+
+  <button class="primary" id="save">Save rules</button>
+  <div id="status"></div>
+
+  <p><a class="link" href="#" id="openOptions">API key & model settings →</a></p>
+  <p><a class="link" href="#" id="openDashboard">View filter dashboard →</a></p>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
