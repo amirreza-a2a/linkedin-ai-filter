@@ -109,11 +109,11 @@ test("getRequiredOriginPattern - extracts match pattern for Chrome permissions",
   );
   assert.equal(
     getRequiredOriginPattern("http://127.0.0.1:1234/v1"),
-    "http://127.0.0.1/*"
+    "http://localhost/*"
   );
   assert.equal(
     getRequiredOriginPattern("http://[::1]:11434/v1"),
-    "http://[::1]/*"
+    "http://localhost/*"
   );
 });
 

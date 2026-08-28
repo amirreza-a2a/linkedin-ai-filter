@@ -47,6 +47,9 @@ export function getRequiredOriginPattern(urlStr) {
   const normalized = validateAndNormalizeBaseUrl(urlStr);
   if (!normalized) return "";
   const parsed = new URL(normalized);
+  if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname.includes(":")) {
+    return `${parsed.protocol}//localhost/*`;
+  }
   return `${parsed.protocol}//${parsed.hostname}/*`;
 }
 
