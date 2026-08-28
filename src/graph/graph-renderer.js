@@ -1,5 +1,5 @@
 // src/graph/graph-renderer.js
-// High-performance HTML5 Canvas renderer with pan, zoom, hover highlight, and node dragging.
+// High-performance HTML5 Canvas renderer with pan, zoom, hover highlight, node dragging, and Fit Graph.
 
 const NODE_COLORS = {
   post: { fill: "#0a66c2", stroke: "#004182", text: "#191919" },
@@ -30,7 +30,9 @@ export class GraphRenderer {
     this.isPanning = false;
     this.panStartX = 0;
     this.panStartY = 0;
-    this.hasMoved = false;
+    this.mouseDownX = 0;
+    this.mouseDownY = 0;
+    this.dragDistance = 0;
 
     this.dpr = window.devicePixelRatio || 1;
     this.animationFrameId = null;
@@ -95,6 +97,53 @@ export class GraphRenderer {
     this.requestRender();
   }
 
+  /**
+   * Automatically calculates bounding box of active nodes, centering and framing the visible graph.
+   *
+   * @param {number} [padding=60]
+   */
+  fitGraph(padding = 60) {
+    const nodes = this.layout.nodes;
+    if (!nodes || nodes.length === 0) {
+      this.resetView();
+      return;
+    }
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (const n of nodes) {
+      const r = this.getNodeRadius(n);
+      minX = Math.min(minX, n.x - r);
+      maxX = Math.max(maxX, n.x + r);
+      minY = Math.min(minY, n.y - r);
+      maxY = Math.max(maxY, n.y + r);
+    }
+
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width || 800;
+    const h = rect.height || 600;
+
+    const graphW = Math.max(maxX - minX, 80);
+    const graphH = Math.max(maxY - minY, 80);
+    const graphCx = (minX + maxX) / 2;
+    const graphCy = (minY + maxY) / 2;
+
+    const availW = Math.max(w - padding * 2, 100);
+    const availH = Math.max(h - padding * 2, 100);
+
+    const fitZoom = Math.max(0.2, Math.min(availW / graphW, availH / graphH, 2.0));
+
+    this.zoom = fitZoom;
+    this.panX = (w / 2 - graphCx) * fitZoom;
+    this.panY = (h / 2 - graphCy) * fitZoom;
+
+    this.layout.reheat(0.15);
+    this.requestRender();
+  }
+
   screenToWorld(screenX, screenY) {
     const rect = this.canvas.getBoundingClientRect();
     const x = screenX - rect.left;
@@ -108,10 +157,10 @@ export class GraphRenderer {
   }
 
   getNodeRadius(node) {
-    if (node.type === "post") return 7;
-    if (node.type === "topic") return Math.min(9 + (node.count || 1) * 1.5, 20);
-    if (node.type === "author") return Math.min(8 + (node.count || 1) * 1.5, 18);
-    return 8;
+    if (node.type === "post") return 6.5;
+    if (node.type === "topic") return Math.min(9 + (node.count || 1) * 1.5, 22);
+    if (node.type === "author") return Math.min(8 + (node.count || 1) * 1.5, 19);
+    return 7;
   }
 
   findNodeAt(screenX, screenY) {
@@ -132,7 +181,10 @@ export class GraphRenderer {
     const c = this.canvas;
 
     c.addEventListener("mousedown", (e) => {
-      this.hasMoved = false;
+      this.mouseDownX = e.clientX;
+      this.mouseDownY = e.clientY;
+      this.dragDistance = 0;
+
       const hit = this.findNodeAt(e.clientX, e.clientY);
       if (hit) {
         this.draggedNode = hit;
@@ -146,13 +198,15 @@ export class GraphRenderer {
     });
 
     window.addEventListener("mousemove", (e) => {
+      const dx = e.clientX - this.mouseDownX;
+      const dy = e.clientY - this.mouseDownY;
+      this.dragDistance = Math.sqrt(dx * dx + dy * dy);
+
       if (this.draggedNode) {
-        this.hasMoved = true;
         const { x, y } = this.screenToWorld(e.clientX, e.clientY);
         this.layout.setNodePosition(this.draggedNode.id, x, y, true);
         this.requestRender();
       } else if (this.isPanning) {
-        this.hasMoved = true;
         this.panX = e.clientX - this.panStartX;
         this.panY = e.clientY - this.panStartY;
         this.requestRender();
@@ -180,7 +234,8 @@ export class GraphRenderer {
     });
 
     c.addEventListener("click", (e) => {
-      if (!this.hasMoved) {
+      // Ignore click if mouse was dragged more than 4px
+      if (this.dragDistance < 5) {
         const hit = this.findNodeAt(e.clientX, e.clientY);
         this.selectedNode = hit;
         this.onNodeClick(hit);

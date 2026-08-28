@@ -34,7 +34,13 @@
     "a.feed-shared-actor__container-link",
   ];
   const POST_LINK_CANDIDATES = [
+    "a.update-components-actor__sub-description-link[href*='/feed/update/']",
+    "a.update-components-actor__sub-description-link[href*='/posts/']",
+    "a.update-components-actor__sub-description a[href*='/feed/update/']",
+    "a.feed-shared-actor__sub-description a[href*='/feed/update/']",
     "a[href*='/feed/update/urn:li:activity:']",
+    "a[href*='/feed/update/urn:li:ugcPost:']",
+    "a.app-aware-link[href*='/feed/update/']",
     "a.app-aware-link[href*='/posts/']",
   ];
 
@@ -102,7 +108,7 @@
       }
     }
 
-    // 3. Post Permalink
+    // 3. Post Permalink (Direct Header / Timestamp anchor)
     let postUrl = "";
     for (const sel of POST_LINK_CANDIDATES) {
       const linkEl = el.querySelector(sel);
@@ -121,15 +127,20 @@
       el.querySelector("[data-urn*='ugcPost:']")?.getAttribute("data-urn") ||
       "";
 
-    // Level 2: Extract URN from permalink if available
+    // Level 2: Extract verified URN from permalink if available
     if (!id && postUrl) {
-      const urnMatch = postUrl.match(/urn:li:activity:\d+/);
+      const urnMatch = postUrl.match(/urn:li:(?:activity|ugcPost):\d+/);
       if (urnMatch) id = urnMatch[0];
     }
 
     // Level 3: Deterministic fallback fingerprint (author + text snippet)
     if (!id) {
       id = hashText(`${author}::${text.slice(0, 500)}`);
+    }
+
+    // If postUrl was not found from anchors but container has a verified activity/ugcPost URN, construct canonical URL
+    if (!postUrl && id && /^urn:li:(?:activity|ugcPost):\d+$/.test(id)) {
+      postUrl = `https://www.linkedin.com/feed/update/${id}`;
     }
 
     return { id, text, author, authorUrl, postUrl, el };

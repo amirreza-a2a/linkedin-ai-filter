@@ -18,39 +18,37 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 20px;
+      padding: 10px 16px;
       background: white;
       border-bottom: 1px solid #e2e8f0;
       z-index: 10;
+      flex-wrap: wrap;
+      gap: 8px;
     }
     .header-left {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
     }
     h1 {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 600;
       color: #0a66c2;
       display: flex;
       align-items: center;
       gap: 6px;
-    }
-    .search-input {
-      padding: 6px 12px;
-      font-size: 12.5px;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      width: 220px;
+      white-space: nowrap;
     }
     .header-actions {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     .btn {
-      padding: 6px 12px;
-      font-size: 12px;
+      padding: 5px 12px;
+      font-size: 11.5px;
       font-weight: 500;
       border-radius: 14px;
       border: 1px solid #0a66c2;
@@ -61,10 +59,48 @@
       display: inline-flex;
       align-items: center;
       transition: background .15s;
+      white-space: nowrap;
     }
     .btn:hover { background: #ebf4fd; }
     .btn-secondary { border-color: #cbd5e1; color: #475569; }
     .btn-secondary:hover { background: #f1f5f9; }
+    .btn-primary { background: #0a66c2; color: white; }
+    .btn-primary:hover { background: #084e96; }
+    .btn-sm { padding: 4px 8px; font-size: 11px; }
+
+    /* Filter Toolbar */
+    .filter-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: #f1f5f9;
+      border-bottom: 1px solid #e2e8f0;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .filter-toolbar select, .filter-toolbar input {
+      padding: 5px 8px;
+      font-size: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: white;
+    }
+    .filter-toolbar input[type="text"] { width: 150px; }
+    .filter-toolbar select { max-width: 140px; }
+
+    /* Focus Mode Banner */
+    .focus-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      background: #e0f2fe;
+      border-bottom: 1px solid #bae6fd;
+      padding: 6px 16px;
+      font-size: 12px;
+      color: #0369a1;
+      font-weight: 500;
+    }
 
     .main-layout {
       display: flex;
@@ -83,37 +119,64 @@
       height: 100%;
     }
 
+    /* Floating View / Physics Controls */
+    .floating-controls {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      gap: 6px;
+      z-index: 5;
+    }
+    .physics-panel {
+      position: absolute;
+      top: 50px;
+      right: 14px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(6px);
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      padding: 12px 14px;
+      width: 220px;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 11.5px;
+      z-index: 6;
+    }
+    .physics-panel.open { display: flex; }
+    .physics-row { display: flex; justify-content: space-between; align-items: center; }
+    .physics-row input[type="range"] { width: 110px; }
+    .preset-group { display: flex; gap: 4px; justify-content: space-between; margin-top: 4px; }
+    .preset-btn { flex: 1; padding: 3px 0; font-size: 10.5px; border-radius: 4px; border: 1px solid #cbd5e1; background: white; cursor: pointer; text-align: center; }
+    .preset-btn:hover { background: #f1f5f9; }
+    .preset-btn.active { background: #0a66c2; color: white; border-color: #0a66c2; }
+
     .legend {
       position: absolute;
-      bottom: 20px;
-      left: 20px;
+      bottom: 16px;
+      left: 16px;
       background: rgba(255, 255, 255, 0.92);
       backdrop-filter: blur(4px);
-      padding: 10px 14px;
+      padding: 8px 12px;
       border-radius: 8px;
       border: 1px solid #e2e8f0;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      font-size: 11.5px;
+      gap: 5px;
+      font-size: 11px;
       color: #475569;
       pointer-events: none;
     }
-    .legend-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-    }
+    .legend-row { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
     .dot-post { background: #0a66c2; }
     .dot-topic { background: #10b981; }
     .dot-author { background: #f59e0b; }
 
+    /* Sidebar Drawer */
     .sidebar {
       width: 360px;
       background: white;
@@ -121,16 +184,19 @@
       display: flex;
       flex-direction: column;
       overflow-y: auto;
-      padding: 20px;
+      padding: 18px;
       box-shadow: -2px 0 6px rgba(0,0,0,0.03);
+      transition: transform .2s ease;
+      z-index: 8;
     }
     .sidebar-header {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
       color: #1e293b;
       margin-bottom: 12px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 6px;
     }
     .badge {
@@ -147,9 +213,9 @@
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       border-radius: 8px;
-      padding: 14px;
-      margin-bottom: 14px;
-      font-size: 12.5px;
+      padding: 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
       line-height: 1.45;
     }
     .detail-card strong { color: #334155; }
@@ -158,8 +224,8 @@
       color: #1e293b;
       white-space: pre-wrap;
       word-break: break-word;
-      font-size: 12.5px;
-      max-height: 250px;
+      font-size: 12px;
+      max-height: 220px;
       overflow-y: auto;
     }
     .link {
@@ -168,20 +234,25 @@
       font-weight: 500;
     }
     .link:hover { text-decoration: underline; }
+    .unavailable-link {
+      color: #94a3b8;
+      font-size: 11.5px;
+      font-style: italic;
+    }
 
     .connected-list {
-      margin-top: 14px;
+      margin-top: 10px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
     }
     .connected-item {
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       border-radius: 6px;
-      padding: 10px;
-      font-size: 12px;
-      line-height: 1.4;
+      padding: 8px 10px;
+      font-size: 11.5px;
+      line-height: 1.35;
       cursor: pointer;
       transition: background .15s;
     }
@@ -192,7 +263,7 @@
 
     .empty-prompt {
       color: #64748b;
-      font-size: 13px;
+      font-size: 12.5px;
       line-height: 1.5;
       text-align: center;
       padding: 40px 10px;
@@ -215,14 +286,39 @@
       color: #1e293b;
       margin-bottom: 8px;
     }
+
+    .sidebar-toggle-btn {
+      display: none;
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      z-index: 9;
+    }
+
+    /* Responsive adjustments for < 900px */
+    @media (max-width: 900px) {
+      .sidebar {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 320px;
+        transform: translateX(100%);
+        box-shadow: -4px 0 16px rgba(0,0,0,0.15);
+      }
+      .sidebar.open {
+        transform: translateX(0);
+      }
+      .sidebar-toggle-btn {
+        display: inline-flex;
+      }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="header-left">
       <h1>🕸️ Knowledge Graph</h1>
-      <input type="text" class="search-input" id="searchGraph" placeholder="Search node label..." />
-      <button class="btn btn-secondary" id="resetViewBtn">Reset View</button>
     </div>
     <div class="header-actions">
       <a class="btn" href="src/saved/saved.html" id="openBrainBtn">🧠 Second Brain</a>
@@ -230,18 +326,79 @@
     </div>
   </header>
 
+  <div class="filter-toolbar">
+    <label>Topic:
+      <select id="topicFilterSelect">
+        <option value="">All Topics</option>
+      </select>
+    </label>
+    <label>Author:
+      <select id="authorFilterSelect">
+        <option value="">All Authors</option>
+      </select>
+    </label>
+    <label>Show:
+      <select id="nodeTypeSelect">
+        <option value="all">All Nodes</option>
+        <option value="posts">Posts only</option>
+        <option value="topics">Topics only</option>
+        <option value="authors">Authors only</option>
+      </select>
+    </label>
+    <input type="text" id="searchGraph" placeholder="Label substring search..." />
+    <button class="btn btn-secondary btn-sm" id="clearFiltersBtn">Clear Filters</button>
+  </div>
+
+  <div class="focus-banner" id="focusBanner">
+    <span id="focusLabel">🎯 Focused Neighborhood</span>
+    <button class="btn btn-secondary btn-sm" id="exitFocusBtn">Exit Focus ✕</button>
+  </div>
+
   <div class="main-layout">
     <div class="canvas-container">
       <canvas id="graphCanvas"></canvas>
+
+      <div class="floating-controls">
+        <button class="btn btn-secondary btn-sm" id="fitGraphBtn">🎯 Fit Graph</button>
+        <button class="btn btn-secondary btn-sm" id="resetViewBtn">Reset View</button>
+        <button class="btn btn-secondary btn-sm" id="togglePhysicsBtn">⚙️ Physics</button>
+      </div>
+
+      <div class="physics-panel" id="physicsPanel">
+        <div style="font-weight:600; color:#334155; margin-bottom:4px;">Graph Physics</div>
+        <div class="physics-row">
+          <span>Density</span>
+          <input type="range" id="densitySlider" min="600" max="2400" step="100" value="1400" />
+        </div>
+        <div class="physics-row">
+          <span>Spacing</span>
+          <input type="range" id="spacingSlider" min="40" max="180" step="5" value="95" />
+        </div>
+        <div class="physics-row">
+          <span>Gravity</span>
+          <input type="range" id="gravitySlider" min="5" max="60" step="5" value="20" />
+        </div>
+        <div style="font-size:10.5px; color:#64748b; margin-top:2px;">Presets:</div>
+        <div class="preset-group">
+          <button class="preset-btn" data-preset="compact">Compact</button>
+          <button class="preset-btn active" data-preset="balanced">Balanced</button>
+          <button class="preset-btn" data-preset="spread">Spread</button>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="resetPhysicsBtn" style="margin-top:4px;">Reset Physics</button>
+      </div>
+
       <div class="legend">
         <div class="legend-row"><div class="dot dot-post"></div> Saved Post</div>
         <div class="legend-row"><div class="dot dot-topic"></div> Topic</div>
         <div class="legend-row"><div class="dot dot-author"></div> Author</div>
       </div>
+
       <div class="empty-state-overlay" id="emptyState" style="display:none;">
-        <h2>No Saved Posts Yet</h2>
-        <p>Posts saved in your Second Brain will automatically form your Knowledge Graph.</p>
+        <h2>No Saved Posts Found</h2>
+        <p id="emptyStateDesc">Posts saved in your Second Brain will automatically form your Knowledge Graph.</p>
       </div>
+
+      <button class="btn btn-primary btn-sm sidebar-toggle-btn" id="toggleSidebarBtn">📋 Details</button>
     </div>
 
     <div class="sidebar" id="sidebar">

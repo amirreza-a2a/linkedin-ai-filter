@@ -2,12 +2,18 @@
 // Lightweight, deterministic spring-embedder force simulation.
 // Zero external dependencies. Uses deterministic initial placement.
 
+export const PHYSICS_PRESETS = {
+  compact: { repulsion: 800, springLength: 60, gravity: 0.04 },
+  balanced: { repulsion: 1400, springLength: 95, gravity: 0.02 },
+  spread: { repulsion: 2400, springLength: 150, gravity: 0.01 },
+};
+
 export class ForceLayout {
   constructor(options = {}) {
-    this.repulsion = options.repulsion ?? 1200;
-    this.springLength = options.springLength ?? 90;
+    this.repulsion = options.repulsion ?? PHYSICS_PRESETS.balanced.repulsion;
+    this.springLength = options.springLength ?? PHYSICS_PRESETS.balanced.springLength;
     this.springStrength = options.springStrength ?? 0.05;
-    this.gravity = options.gravity ?? 0.02;
+    this.gravity = options.gravity ?? PHYSICS_PRESETS.balanced.gravity;
     this.damping = options.damping ?? 0.85;
     this.alphaDecay = options.alphaDecay ?? 0.97;
     this.alphaMin = 0.005;
@@ -18,6 +24,38 @@ export class ForceLayout {
     this.width = 800;
     this.height = 600;
     this.alpha = 1.0;
+  }
+
+  /**
+   * Updates physics parameters and reheats the simulation.
+   *
+   * @param {Object} params
+   * @param {number} [params.repulsion]
+   * @param {number} [params.springLength]
+   * @param {number} [params.gravity]
+   */
+  setPhysics({ repulsion, springLength, gravity } = {}) {
+    if (typeof repulsion === "number") this.repulsion = repulsion;
+    if (typeof springLength === "number") this.springLength = springLength;
+    if (typeof gravity === "number") this.gravity = gravity;
+    this.reheat(0.3);
+  }
+
+  /**
+   * Applies a named physics preset ('compact' | 'balanced' | 'spread').
+   *
+   * @param {"compact" | "balanced" | "spread"} presetName
+   */
+  applyPreset(presetName = "balanced") {
+    const p = PHYSICS_PRESETS[presetName.toLowerCase()] || PHYSICS_PRESETS.balanced;
+    this.setPhysics(p);
+  }
+
+  /**
+   * Resets physics to the default balanced preset.
+   */
+  resetPhysics() {
+    this.applyPreset("balanced");
   }
 
   /**
@@ -127,8 +165,8 @@ export class ForceLayout {
         u.vy += fy;
       }
       if (!v.pinned) {
-        v.vx -= fx;
-        v.vy -= fy;
+        v.vx += fx;
+        v.vy += fy;
       }
     }
 

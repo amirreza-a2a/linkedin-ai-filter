@@ -131,3 +131,71 @@ export function buildKnowledgeGraph(savedPosts) {
 
   return { nodes, edges };
 }
+
+/**
+ * Filters a graph by node type while eliminating dangling edges.
+ *
+ * @param {{ nodes: Array<Object>, edges: Array<Object> }} graph
+ * @param {"all" | "posts" | "topics" | "authors"} nodeTypeFilter
+ * @returns {{ nodes: Array<Object>, edges: Array<Object> }}
+ */
+export function filterGraphByNodeType(graph, nodeTypeFilter = "all") {
+  if (!graph || !Array.isArray(graph.nodes)) {
+    return { nodes: [], edges: [] };
+  }
+
+  const type = String(nodeTypeFilter || "all").toLowerCase();
+  if (type === "all") {
+    return graph;
+  }
+
+  const allowedType = type === "posts" ? "post" : type === "topics" ? "topic" : type === "authors" ? "author" : null;
+  if (!allowedType) {
+    return graph;
+  }
+
+  const filteredNodes = graph.nodes.filter((n) => n.type === allowedType);
+  const nodeIds = new Set(filteredNodes.map((n) => n.id));
+
+  // Retain only edges where BOTH source and target exist in the filtered node set
+  const filteredEdges = (graph.edges || []).filter(
+    (e) => nodeIds.has(e.source) && nodeIds.has(e.target)
+  );
+
+  return { nodes: filteredNodes, edges: filteredEdges };
+}
+
+/**
+ * Extracts a focused neighborhood subgraph around a specific target node.
+ *
+ * @param {{ nodes: Array<Object>, edges: Array<Object> }} graph
+ * @param {string} targetNodeId
+ * @returns {{ nodes: Array<Object>, edges: Array<Object> }}
+ */
+export function extractNeighborhood(graph, targetNodeId) {
+  if (!graph || !Array.isArray(graph.nodes) || !targetNodeId) {
+    return { nodes: [], edges: [] };
+  }
+
+  const targetNode = graph.nodes.find((n) => n.id === targetNodeId);
+  if (!targetNode) {
+    return { nodes: [], edges: [] };
+  }
+
+  const neighborhoodNodeIds = new Set([targetNodeId]);
+  const neighborhoodEdges = [];
+
+  for (const edge of graph.edges || []) {
+    if (edge.source === targetNodeId) {
+      neighborhoodNodeIds.add(edge.target);
+      neighborhoodEdges.push(edge);
+    } else if (edge.target === targetNodeId) {
+      neighborhoodNodeIds.add(edge.source);
+      neighborhoodEdges.push(edge);
+    }
+  }
+
+  const neighborhoodNodes = graph.nodes.filter((n) => neighborhoodNodeIds.has(n.id));
+
+  return { nodes: neighborhoodNodes, edges: neighborhoodEdges };
+}

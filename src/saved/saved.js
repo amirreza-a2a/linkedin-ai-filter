@@ -31,7 +31,7 @@ function updateTopicDropdown(posts) {
   const currentVal = topicSelect.value;
   const topicsSet = new Set();
   for (const p of posts) {
-    for (const t of p.topics || []) topicsSet.add(t);
+    for (const t of p.topics || []) uniqueTopics.add(t);
   }
 
   const sortedTopics = Array.from(topicsSet).sort((a, b) => a.localeCompare(b));
@@ -59,7 +59,7 @@ function renderPosts(posts) {
 
       const linkHtml = p.postUrl
         ? `<a class="permalink" href="${escapeHtml(p.postUrl)}" target="_blank" rel="noopener">Open on LinkedIn ↗</a>`
-        : `<span></span>`;
+        : `<span style="color:#94a3b8; font-size:11.5px; font-style:italic;">Original link unavailable</span>`;
 
       const reasonBadge = p.saveReason
         ? `<span class="badge badge-reason">${escapeHtml(p.saveReason)}</span>`
