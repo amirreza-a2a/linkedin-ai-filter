@@ -9,34 +9,95 @@ import {
   CACHE_VERSION,
 } from "../storage/rules-store.js";
 import { appendLogEntries } from "../storage/log-store.js";
+import { evaluateSaveRules } from "../rules/save-rule-engine.js";
+import {
+  savePost,
+  savePostsBatch,
+  unsavePost,
+  getSavedPosts,
+  isPostSaved,
+} from "../storage/saved-posts-store.js";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "CLASSIFY_POSTS") return false;
+  if (!message || typeof message.type !== "string") return false;
 
-  const posts = Array.isArray(message.posts) ? message.posts : [];
-
-  handleClassify(posts)
-    .then((results) => {
-      try {
-        sendResponse({ ok: true, results });
-      } catch (err) {
-        console.warn("[FeedRule] sendResponse failed:", err);
-      }
-    })
-    .catch((err) => {
-      console.error("[FeedRule] classify failed:", err);
-      try {
-        sendResponse({
-          ok: false,
-          error: String(err),
-          results: posts.map((p) => ({ id: p.id, hide: false, reason: "error-fail-open", topics: [] })),
+  switch (message.type) {
+    case "CLASSIFY_POSTS": {
+      const posts = Array.isArray(message.posts) ? message.posts : [];
+      handleClassify(posts)
+        .then((results) => {
+          try {
+            sendResponse({ ok: true, results });
+          } catch (err) {
+            console.warn("[FeedRule] sendResponse failed:", err);
+          }
+        })
+        .catch((err) => {
+          console.error("[FeedRule] classify failed:", err);
+          try {
+            sendResponse({
+              ok: false,
+              error: String(err),
+              results: posts.map((p) => ({
+                id: p.id,
+                hide: false,
+                reason: "error-fail-open",
+                topics: [],
+                saved: false,
+                saveReason: "",
+                autoSaved: false,
+              })),
+            });
+          } catch (sendErr) {
+            console.warn("[FeedRule] sendResponse catch failed:", sendErr);
+          }
         });
-      } catch (sendErr) {
-        console.warn("[FeedRule] sendResponse catch failed:", sendErr);
-      }
-    });
+      return true; // keep channel open
+    }
 
-  return true; // keep the message channel open for async sendResponse
+    case "SAVE_POST": {
+      if (!message.post || !message.post.id) {
+        sendResponse({ ok: false, error: "Missing post payload or post.id" });
+        return false;
+      }
+      savePost({
+        ...message.post,
+        autoSaved: Boolean(message.post.autoSaved),
+        saveReason: message.post.saveReason || "Manual save",
+      })
+        .then((savedPost) => sendResponse({ ok: true, post: savedPost }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    case "UNSAVE_POST": {
+      if (!message.id) {
+        sendResponse({ ok: false, error: "Missing post id" });
+        return false;
+      }
+      unsavePost(message.id)
+        .then((removed) => sendResponse({ ok: true, removed }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    case "GET_SAVED_POSTS": {
+      getSavedPosts(message.filter || {})
+        .then((posts) => sendResponse({ ok: true, posts }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    case "IS_POST_SAVED": {
+      isPostSaved(message.id)
+        .then((saved) => sendResponse({ ok: true, saved }))
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    default:
+      return false;
+  }
 });
 
 async function logResults(posts, results, provider, rulesText) {
@@ -64,7 +125,15 @@ async function handleClassify(posts) {
   const settings = await getSettings();
 
   if (!settings.enabled || !settings.rulesText?.trim()) {
-    const results = posts.map((p) => ({ id: p.id, hide: false, reason: "disabled-or-no-rules", topics: [] }));
+    const results = posts.map((p) => ({
+      id: p.id,
+      hide: false,
+      reason: "disabled-or-no-rules",
+      topics: [],
+      saved: false,
+      saveReason: "",
+      autoSaved: false,
+    }));
     await logResults(posts, results, settings.provider, settings.rulesText);
     return results;
   }
@@ -72,6 +141,7 @@ async function handleClassify(posts) {
   const provider = settings.provider || "openai";
   const model = settings.model?.[provider] || "";
   const rulesText = settings.rulesText || "";
+  const saveRulesText = settings.saveRulesText || "";
   const baseUrl = settings.baseUrl?.[provider] || "";
   const apiKey = settings.apiKeys?.[provider] || "";
 
@@ -94,62 +164,103 @@ async function handleClassify(posts) {
   for (let i = 0; i < posts.length; i++) {
     const cached = cachedMap[hashes[i]];
     if (cached) {
+      const topics = Array.isArray(cached.topics) ? cached.topics : [];
+      const saveEval = evaluateSaveRules(topics, saveRulesText);
       results[i] = {
         id: posts[i].id,
         hide: cached.hide === true,
         reason: cached.reason || "",
-        topics: Array.isArray(cached.topics) ? cached.topics : [],
+        topics,
+        saved: saveEval.shouldSave,
+        saveReason: saveEval.saveReason,
+        autoSaved: saveEval.shouldSave,
       };
     } else {
       uncached.push({ index: i, post: posts[i], hash: hashes[i] });
     }
   }
 
-  if (uncached.length === 0) {
-    await logResults(posts, results, settings.provider, settings.rulesText);
-    return results;
+  // If there are uncached posts, query the LLM provider
+  if (uncached.length > 0) {
+    const withinCap = await incrementAndCheckDailyCap(settings.dailyCallCap);
+    if (!withinCap) {
+      uncached.forEach(({ index, post }) => {
+        results[index] = {
+          id: post.id,
+          hide: false,
+          reason: "daily-cap-reached",
+          topics: [],
+          saved: false,
+          saveReason: "",
+          autoSaved: false,
+        };
+      });
+    } else {
+      const classifyFn = getProviderFn(provider);
+      const apiResults = await classifyFn({
+        apiKey,
+        model,
+        baseUrl,
+        rulesText,
+        posts: uncached.map((u) => u.post),
+      });
+
+      const safeResults = Array.isArray(apiResults) ? apiResults : [];
+      const byId = new Map(safeResults.map((r) => [String(r.id), r]));
+      const toCache = {};
+
+      for (const { index, post, hash } of uncached) {
+        const r = byId.get(String(post.id)) || { hide: false, reason: "missing", topics: [] };
+        const topics = Array.isArray(r.topics) ? r.topics : [];
+        const saveEval = evaluateSaveRules(topics, saveRulesText);
+
+        const decision = {
+          id: post.id,
+          hide: r.hide === true,
+          reason: typeof r.reason === "string" ? r.reason : "",
+          topics,
+          saved: saveEval.shouldSave,
+          saveReason: saveEval.saveReason,
+          autoSaved: saveEval.shouldSave,
+        };
+        results[index] = decision;
+        toCache[hash] = {
+          hide: decision.hide,
+          reason: decision.reason,
+          topics: decision.topics,
+        };
+      }
+
+      await setCachedDecisions(toCache);
+    }
   }
 
-  const withinCap = await incrementAndCheckDailyCap(settings.dailyCallCap);
-  if (!withinCap) {
-    uncached.forEach(({ index, post }) => {
-      results[index] = { id: post.id, hide: false, reason: "daily-cap-reached", topics: [] };
-    });
-    await logResults(posts, results, settings.provider, settings.rulesText);
-    return results;
+  // Evaluate and automatically persist any posts that match save rules
+  const postsToAutoSave = [];
+  const byPostId = new Map(posts.map((p) => [String(p.id), p]));
+
+  for (const r of results) {
+    if (r.saved) {
+      const originalPost = byPostId.get(String(r.id));
+      if (originalPost) {
+        postsToAutoSave.push({
+          id: r.id,
+          text: originalPost.text,
+          author: originalPost.author || "",
+          authorUrl: originalPost.authorUrl || "",
+          postUrl: originalPost.postUrl || "",
+          topics: r.topics,
+          saveReason: r.saveReason,
+          autoSaved: true,
+        });
+      }
+    }
   }
 
-  const classifyFn = getProviderFn(provider);
-
-  const apiResults = await classifyFn({
-    apiKey,
-    model,
-    baseUrl,
-    rulesText,
-    posts: uncached.map((u) => u.post),
-  });
-
-  const safeResults = Array.isArray(apiResults) ? apiResults : [];
-  const byId = new Map(safeResults.map((r) => [String(r.id), r]));
-  const toCache = {};
-
-  for (const { index, post, hash } of uncached) {
-    const r = byId.get(String(post.id)) || { hide: false, reason: "missing", topics: [] };
-    const decision = {
-      id: post.id,
-      hide: r.hide === true,
-      reason: typeof r.reason === "string" ? r.reason : "",
-      topics: Array.isArray(r.topics) ? r.topics : [],
-    };
-    results[index] = decision;
-    toCache[hash] = {
-      hide: decision.hide,
-      reason: decision.reason,
-      topics: decision.topics,
-    };
+  if (postsToAutoSave.length > 0) {
+    await savePostsBatch(postsToAutoSave);
   }
 
-  await setCachedDecisions(toCache);
   await logResults(posts, results, settings.provider, settings.rulesText);
   return results;
 }

@@ -8,7 +8,7 @@
 // posts: [{ id: string, text: string }]
 
 const MAX_TOPIC_LENGTH = 50;
-const MAX_TOPICS_COUNT = 5;
+const DEFAULT_MAX_TOPICS_COUNT = 5;
 
 /**
  * Normalizes an array of raw topics syntactically:
@@ -17,12 +17,13 @@ const MAX_TOPICS_COUNT = 5;
  * - Trims whitespace and drops empty strings
  * - Caps each topic at 50 characters
  * - Deduplicates case-insensitively while preserving original casing of first appearance
- * - Caps total topics at 5 per post
+ * - Caps total topics at maxCount (defaults to 5 per post)
  *
  * @param {any} rawTopics
+ * @param {number} [maxCount=5]
  * @returns {string[]} Normalized topic array
  */
-export function normalizeTopics(rawTopics) {
+export function normalizeTopics(rawTopics, maxCount = DEFAULT_MAX_TOPICS_COUNT) {
   if (!Array.isArray(rawTopics)) {
     return [];
   }
@@ -44,7 +45,7 @@ export function normalizeTopics(rawTopics) {
     if (!seenLower.has(lower)) {
       seenLower.add(lower);
       result.push(capped);
-      if (result.length >= MAX_TOPICS_COUNT) {
+      if (maxCount && result.length >= maxCount) {
         break;
       }
     }

@@ -3,14 +3,6 @@
 // Plain script (no ES module imports) — Chrome content scripts don't
 // reliably support static `import` without a bundler, so everything the
 // content script needs lives in this one file.
-//
-// LinkedIn no longer exposes stable data-urn/data-id attributes on feed
-// posts, and its CSS classes are hashed per build (e.g. "_963ba617") so
-// they're useless as selectors. What IS stable is semantic/ARIA markup:
-//   - the feed container: div[data-testid="mainFeed"][role="list"]
-//   - each post:          div[role="listitem"]  (child of the above)
-//   - the post text:      [data-testid="expandable-text-box"]
-// If LinkedIn changes markup again, check these three lines first.
 
 (() => {
   console.log("[FeedRule] content script loaded on", location.href);
@@ -29,6 +21,21 @@
     ".feed-shared-update-v2__description",
     ".update-components-text",
     ".feed-shared-text",
+  ];
+  const ACTOR_NAME_CANDIDATES = [
+    ".update-components-actor__name",
+    ".feed-shared-actor__name",
+    "span.update-components-actor__title span[dir='ltr']",
+    ".update-components-actor__title",
+  ];
+  const ACTOR_LINK_CANDIDATES = [
+    "a.update-components-actor__image",
+    "a.app-aware-link[href*='/in/']",
+    "a.feed-shared-actor__container-link",
+  ];
+  const POST_LINK_CANDIDATES = [
+    "a[href*='/feed/update/urn:li:activity:']",
+    "a.app-aware-link[href*='/posts/']",
   ];
 
   let activeContainerSelector = null;
@@ -50,10 +57,7 @@
     return [];
   }
 
-  // Simple non-cryptographic hash (djb2) — fast, synchronous, good enough
-  // to build a stable-ish id from post text since LinkedIn doesn't give
-  // us a real one anymore. Two posts with byte-identical text will share
-  // an id; acceptable tradeoff for an MVP.
+  // Simple non-cryptographic hash (djb2) for fallback fingerprinting
   function hashText(str) {
     let hash = 5381;
     for (let i = 0; i < str.length; i++) {
@@ -78,8 +82,57 @@
       return null; // ads/empty spacers etc.
     }
 
-    const id = el.getAttribute("data-urn") || el.getAttribute("data-id") || hashText(text.slice(0, 300));
-    return { id, text, el };
+    // 1. Author Name
+    let author = "";
+    for (const sel of ACTOR_NAME_CANDIDATES) {
+      const authorEl = el.querySelector(sel);
+      if (authorEl?.innerText?.trim()) {
+        author = authorEl.innerText.trim().split("\n")[0].trim();
+        break;
+      }
+    }
+
+    // 2. Author Profile URL
+    let authorUrl = "";
+    for (const sel of ACTOR_LINK_CANDIDATES) {
+      const linkEl = el.querySelector(sel);
+      if (linkEl?.href) {
+        authorUrl = linkEl.href.split("?")[0];
+        break;
+      }
+    }
+
+    // 3. Post Permalink
+    let postUrl = "";
+    for (const sel of POST_LINK_CANDIDATES) {
+      const linkEl = el.querySelector(sel);
+      if (linkEl?.href) {
+        postUrl = linkEl.href.split("?")[0];
+        break;
+      }
+    }
+
+    // 4. Stable 3-level Post ID Strategy
+    // Level 1: Direct activity or UGC URN attribute on container or children
+    let id =
+      el.getAttribute("data-urn") ||
+      el.getAttribute("data-id") ||
+      el.querySelector("[data-urn*='activity:']")?.getAttribute("data-urn") ||
+      el.querySelector("[data-urn*='ugcPost:']")?.getAttribute("data-urn") ||
+      "";
+
+    // Level 2: Extract URN from permalink if available
+    if (!id && postUrl) {
+      const urnMatch = postUrl.match(/urn:li:activity:\d+/);
+      if (urnMatch) id = urnMatch[0];
+    }
+
+    // Level 3: Deterministic fallback fingerprint (author + text snippet)
+    if (!id) {
+      id = hashText(`${author}::${text.slice(0, 500)}`);
+    }
+
+    return { id, text, author, authorUrl, postUrl, el };
   }
 
   // --- DOM filtering ---------------------------------------------------
@@ -136,7 +189,13 @@
       chrome.runtime.sendMessage(
         {
           type: "CLASSIFY_POSTS",
-          posts: batch.map((p) => ({ id: p.id, text: p.text })),
+          posts: batch.map((p) => ({
+            id: p.id,
+            text: p.text,
+            author: p.author,
+            authorUrl: p.authorUrl,
+            postUrl: p.postUrl,
+          })),
         },
         (response) => {
           if (chrome.runtime.lastError) {

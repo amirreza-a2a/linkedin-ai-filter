@@ -5,6 +5,7 @@
 const DEFAULTS = {
   enabled: true,
   rulesText: "", // e.g. "Hide: recruiter spam, humble-brag posts, crypto ads"
+  saveRulesText: "", // e.g. "AI, 5G, Embedded Systems, Semiconductors"
   provider: "openai", // "openai" | "gemini" | "claude"
   model: {
     openai: "gpt-4o-mini",
@@ -42,6 +43,7 @@ export async function getSettings() {
   const synced = (await chrome.storage.sync.get([
     "enabled",
     "rulesText",
+    "saveRulesText",
     "provider",
     "model",
     "baseUrl",
@@ -65,6 +67,7 @@ export async function getSettings() {
   return {
     enabled: synced.enabled ?? DEFAULTS.enabled,
     rulesText: typeof synced.rulesText === "string" ? synced.rulesText : DEFAULTS.rulesText,
+    saveRulesText: typeof synced.saveRulesText === "string" ? synced.saveRulesText : DEFAULTS.saveRulesText,
     provider: typeof synced.provider === "string" ? synced.provider : DEFAULTS.provider,
     model: { ...DEFAULTS.model, ...syncedModel },
     baseUrl: { ...DEFAULTS.baseUrl, ...syncedBaseUrl },
