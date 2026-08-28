@@ -2,6 +2,8 @@
 import { buildClassificationPrompt, parseClassificationResponse } from "./provider-base.js";
 import { resolveProviderEndpoint } from "./url-helper.js";
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 export async function classifyBatch({ apiKey, model, baseUrl, rulesText, posts }) {
   const prompt = buildClassificationPrompt(rulesText, posts);
   const endpoint = resolveProviderEndpoint("claude", baseUrl, model);
@@ -16,16 +18,30 @@ export async function classifyBatch({ apiKey, model, baseUrl, rulesText, posts }
     headers["x-api-key"] = apiKey.trim();
   }
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: model || "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      temperature: 0,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error("Request timeout after 15s")), REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: model || "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`Claude API request timed out after 15s connecting to ${endpoint}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");

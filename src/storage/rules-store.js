@@ -20,23 +20,37 @@ const DEFAULTS = {
 };
 
 export async function getSettings() {
-  const synced = await chrome.storage.sync.get([
+  const synced = (await chrome.storage.sync.get([
     "enabled",
     "rulesText",
     "provider",
     "model",
     "baseUrl",
     "dailyCallCap",
-  ]);
-  const local = await chrome.storage.local.get(["apiKeys"]);
+  ])) || {};
+  const local = (await chrome.storage.local.get(["apiKeys"])) || {};
+
+  const syncedModel =
+    typeof synced.model === "object" && synced.model !== null && !Array.isArray(synced.model)
+      ? synced.model
+      : {};
+  const syncedBaseUrl =
+    typeof synced.baseUrl === "object" && synced.baseUrl !== null && !Array.isArray(synced.baseUrl)
+      ? synced.baseUrl
+      : {};
+  const localApiKeys =
+    typeof local.apiKeys === "object" && local.apiKeys !== null && !Array.isArray(local.apiKeys)
+      ? local.apiKeys
+      : {};
+
   return {
     enabled: synced.enabled ?? DEFAULTS.enabled,
-    rulesText: synced.rulesText ?? DEFAULTS.rulesText,
-    provider: synced.provider ?? DEFAULTS.provider,
-    model: { ...DEFAULTS.model, ...(synced.model || {}) },
-    baseUrl: { ...DEFAULTS.baseUrl, ...(synced.baseUrl || {}) },
-    dailyCallCap: synced.dailyCallCap ?? DEFAULTS.dailyCallCap,
-    apiKeys: local.apiKeys || {}, // { openai: "...", gemini: "...", claude: "..." }
+    rulesText: typeof synced.rulesText === "string" ? synced.rulesText : DEFAULTS.rulesText,
+    provider: typeof synced.provider === "string" ? synced.provider : DEFAULTS.provider,
+    model: { ...DEFAULTS.model, ...syncedModel },
+    baseUrl: { ...DEFAULTS.baseUrl, ...syncedBaseUrl },
+    dailyCallCap: typeof synced.dailyCallCap === "number" ? synced.dailyCallCap : DEFAULTS.dailyCallCap,
+    apiKeys: localApiKeys,
   };
 }
 

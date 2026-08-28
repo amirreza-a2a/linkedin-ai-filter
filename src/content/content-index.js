@@ -114,7 +114,7 @@
     }
   }
 
-  // --- Feed watcher -----------------------------------------------------
+  // --- Feed watcher & Request Queue --------------------------------------
   const elementById = new Map();
   const seen = new WeakSet();
   let pending = [];
@@ -122,12 +122,14 @@
   const DEBOUNCE_MS = 600;
   const BATCH_SIZE = 8;
 
-  function classifyAndApply(batch) {
-    if (!batch || batch.length === 0) return;
-    console.log(
-      "[FeedRule] sending batch to background:",
-      batch.map((p) => ({ id: p.id, textPreview: p.text.slice(0, 60) }))
-    );
+  const batchQueue = [];
+  let isProcessingQueue = false;
+
+  function sendBatchMessage(batch, callback) {
+    if (!batch || batch.length === 0) {
+      callback();
+      return;
+    }
     for (const post of batch) elementById.set(post.id, post.el);
 
     try {
@@ -139,10 +141,10 @@
         (response) => {
           if (chrome.runtime.lastError) {
             console.warn(
-              "[FeedRule] sendMessage note:",
-              chrome.runtime.lastError.message,
-              "(If you recently reloaded the extension, refresh this page to reconnect)"
+              "[FeedRule] background message status:",
+              chrome.runtime.lastError.message
             );
+            callback();
             return;
           }
           console.log("[FeedRule] got response from background:", response);
@@ -151,19 +153,36 @@
             const el = elementById.get(decision.id);
             if (el) applyDecision(el, decision);
           }
+          callback();
         }
       );
-    } catch (e) {
-      console.warn("[FeedRule] runtime context unavailable:", e);
+    } catch (err) {
+      console.warn("[FeedRule] extension context disconnected:", err);
+      callback();
     }
+  }
+
+  async function processQueue() {
+    if (isProcessingQueue || batchQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (batchQueue.length > 0) {
+      const nextBatch = batchQueue.shift();
+      await new Promise((resolve) => {
+        sendBatchMessage(nextBatch, resolve);
+      });
+    }
+
+    isProcessingQueue = false;
   }
 
   function flush() {
     if (pending.length === 0) return;
     const batch = pending.splice(0, pending.length);
     for (let i = 0; i < batch.length; i += BATCH_SIZE) {
-      classifyAndApply(batch.slice(i, i + BATCH_SIZE));
+      batchQueue.push(batch.slice(i, i + BATCH_SIZE));
     }
+    processQueue();
   }
 
   function scan(root) {
