@@ -1,6 +1,7 @@
 // src/content/content-index.js
 // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
 // Identity-aware incremental reprocessing for initial load, Load More, and container reuse.
+// Hardened against self-mutation loops, memory leaks, and DOM recycling race conditions.
 
 import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
@@ -159,13 +160,48 @@ export function findContainers(root) {
   return canonicalNodes;
 }
 
-// --- DOM filtering ---------------------------------------------------
+// --- DOM filtering & Bounded Caches ----------------------------------
+const MAX_CACHED_DECISIONS = 2000;
+const MAX_USER_REVEALED = 500;
+
+const decisionsById = new Map(); // postId -> decision object (bounded LRU)
+const userRevealedPostIds = new Set(); // postId user explicitly revealed via "Show anyway"
+
+export function cacheDecision(postId, decision) {
+  if (!postId || !decision) return;
+  if (decisionsById.size >= MAX_CACHED_DECISIONS) {
+    const oldestKey = decisionsById.keys().next().value;
+    if (oldestKey) decisionsById.delete(oldestKey);
+  }
+  decisionsById.set(postId, decision);
+}
+
+function markPostUserRevealed(postId) {
+  if (!postId) return;
+  if (userRevealedPostIds.size >= MAX_USER_REVEALED) {
+    const oldest = userRevealedPostIds.keys().next().value;
+    if (oldest) userRevealedPostIds.delete(oldest);
+  }
+  userRevealedPostIds.add(postId);
+}
+
 export function applyDecision(el, decision) {
   if (!el || !decision) return;
 
-  decisionsById.set(decision.id, decision);
-  processedPostIds.add(decision.id);
+  cacheDecision(decision.id, decision);
   inFlightPostIds.delete(decision.id);
+
+  // Stale selection protection: if el is currently bound to a different post, do not touch this element
+  const currentPostOnNode = nodeToPostId.get(el);
+  if (currentPostOnNode && currentPostOnNode !== decision.id) {
+    return;
+  }
+
+  // If user previously clicked "Show anyway" on this post identity, preserve user reveal
+  if (userRevealedPostIds.has(decision.id) || el.dataset?.feedruleUserRevealed === "1") {
+    el.classList?.remove?.(HIDDEN_CLASS);
+    return;
+  }
 
   if (!decision.hide) {
     el.classList?.remove?.(HIDDEN_CLASS);
@@ -196,7 +232,11 @@ export function applyDecision(el, decision) {
     showBtn.className = "feedrule-show-btn";
     showBtn.textContent = "Show anyway";
     if (showBtn.addEventListener) {
-      showBtn.addEventListener("click", () => el.classList?.remove?.(HIDDEN_CLASS));
+      showBtn.addEventListener("click", () => {
+        markPostUserRevealed(decision.id);
+        if (el.dataset) el.dataset.feedruleUserRevealed = "1";
+        el.classList?.remove?.(HIDDEN_CLASS);
+      });
     }
 
     placeholder.appendChild(label);
@@ -212,11 +252,9 @@ export function applyDecision(el, decision) {
 }
 
 // --- Feed watcher & Request Queue --------------------------------------
-const elementById = new Map(); // postId -> Element
+const elementById = new Map(); // postId -> Element (in-flight only, bounded to active batch)
 const nodeToPostId = new WeakMap(); // Element -> postId (tracks current post on this DOM node)
-const decisionsById = new Map(); // postId -> decision object
-const inFlightPostIds = new Set(); // postId currently queued or in-flight
-const processedPostIds = new Set(); // postId already classified
+const inFlightPostIds = new Set(); // postId currently queued in pending or batchQueue
 let pending = [];
 let flushTimer = null;
 const DEBOUNCE_MS = 600;
@@ -229,12 +267,14 @@ let isProcessingQueue = false;
 export function getPendingPosts() { return [...pending]; }
 export function getCachedDecisions() { return new Map(decisionsById); }
 export function getInFlightPostIds() { return new Set(inFlightPostIds); }
+export function getUserRevealedPostIds() { return new Set(userRevealedPostIds); }
+export function getInFlightElementCount() { return elementById.size; }
 
 export function resetContentState() {
   elementById.clear();
   decisionsById.clear();
+  userRevealedPostIds.clear();
   inFlightPostIds.clear();
-  processedPostIds.clear();
   pending = [];
   batchQueue.length = 0;
   isProcessingQueue = false;
@@ -271,18 +311,23 @@ function sendBatchMessage(batch, callback) {
             "background message status:",
             chrome.runtime.lastError.message
           );
-          for (const post of batch) inFlightPostIds.delete(post.id);
+          for (const post of batch) {
+            inFlightPostIds.delete(post.id);
+            elementById.delete(post.id);
+          }
           callback();
           return;
         }
         logger.debug("CONTENT", "got response from background:", response);
         const results = response?.results || [];
         for (const decision of results) {
-          decisionsById.set(decision.id, decision);
-          processedPostIds.add(decision.id);
+          cacheDecision(decision.id, decision);
           inFlightPostIds.delete(decision.id);
 
           const el = elementById.get(decision.id);
+          elementById.delete(decision.id); // Immediate release of DOM reference for garbage collection
+
+          // Stale selection protection: verify DOM element has not been recycled for a different post
           if (el && nodeToPostId.get(el) === decision.id) {
             applyDecision(el, decision);
           }
@@ -292,7 +337,10 @@ function sendBatchMessage(batch, callback) {
     );
   } catch (err) {
     logger.warn("CONTENT", "extension context disconnected:", err);
-    for (const post of batch) inFlightPostIds.delete(post.id);
+    for (const post of batch) {
+      inFlightPostIds.delete(post.id);
+      elementById.delete(post.id);
+    }
     callback();
   }
 }
@@ -390,6 +438,9 @@ export function scan(root) {
         const oldPlaceholder = node.querySelector?.(".feedrule-placeholder");
         if (oldPlaceholder?.remove) oldPlaceholder.remove();
       }
+      if (node.dataset?.feedruleUserRevealed) {
+        delete node.dataset.feedruleUserRevealed;
+      }
     }
 
     // Associate current post ID with this DOM node
@@ -470,6 +521,7 @@ export function processMutationQueue() {
 /**
  * Centralized MutationObserver handler.
  * Observes child additions and targeted container attributes, resolving enclosing post containers.
+ * Hardened to prevent self-mutation loops from FeedRule's own DOM modifications.
  *
  * @param {MutationRecord[]} mutations
  */
@@ -486,17 +538,46 @@ export function handleMutations(mutations) {
     if (m.type === "childList") {
       for (const node of m.addedNodes || []) {
         if (!node || node.nodeType !== 1) continue; // Node.ELEMENT_NODE
+
+        // Self-mutation defense: ignore extension-injected UI elements
+        if (
+          node.classList?.contains?.("feedrule-placeholder") ||
+          node.classList?.contains?.("feedrule-show-btn")
+        ) {
+          continue;
+        }
+
         // If the added node is inside an existing container, add the enclosing container
         const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
         if (enclosing) {
           mutationQueue.add(enclosing);
+        } else {
+          mutationQueue.add(node);
         }
-        mutationQueue.add(node);
         sawAdditions = true;
       }
     } else if (m.type === "attributes") {
       const target = m.target;
       if (target && target.nodeType === 1) {
+        // Self-mutation defense: ignore attribute changes on extension-injected elements
+        if (
+          target.classList?.contains?.("feedrule-placeholder") ||
+          target.classList?.contains?.("feedrule-show-btn")
+        ) {
+          continue;
+        }
+
+        // Self-mutation defense on class attribute:
+        // If the class attribute mutated on a post container that already has an established post identity and cached decision,
+        // ignore the mutation (since FeedRule toggling feedrule-hidden caused it)
+        if (m.attributeName === "class") {
+          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
+          const currentPostId = nodeToPostId.get(enclosing);
+          if (currentPostId && decisionsById.has(currentPostId)) {
+            continue;
+          }
+        }
+
         const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
         mutationQueue.add(enclosing);
         sawAdditions = true;

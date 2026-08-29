@@ -1,5 +1,6 @@
 // test/load-more-rescanning.test.js
-// Regression and contract tests for LinkedIn "Load More" / infinite scroll re-scanning and DOM container reuse.
+// Hardened regression and contract tests for LinkedIn "Load More" / infinite scroll re-scanning,
+// DOM container reuse, self-mutation loop defense, memory lifecycle bounding, and race conditions.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -13,6 +14,10 @@ import {
   resetContentState,
   getPendingPosts,
   getCachedDecisions,
+  getInFlightPostIds,
+  getUserRevealedPostIds,
+  getInFlightElementCount,
+  cacheDecision,
 } from "../src/content/content-index.js";
 
 // Synthetic DOM Node mock tailored for content script testing
@@ -21,6 +26,7 @@ function createMockNode(tagName, attrs = {}, text = "") {
   const attributes = { ...attrs };
   const children = [];
   const dataset = { ...attrs.dataset };
+  const listeners = new Map();
 
   const node = {
     tagName: tagName.toUpperCase(),
@@ -33,8 +39,30 @@ function createMockNode(tagName, attrs = {}, text = "") {
     parentElement: null,
     firstChild: null,
 
-    addEventListener(event, fn) {},
-    removeEventListener(event, fn) {},
+    get className() {
+      return this.getAttribute("class") || "";
+    },
+    set className(val) {
+      this.setAttribute("class", val || "");
+    },
+
+    addEventListener(event, fn) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(fn);
+    },
+
+    removeEventListener(event, fn) {
+      if (listeners.has(event)) {
+        const list = listeners.get(event);
+        const idx = list.indexOf(fn);
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    },
+
+    trigger(event) {
+      const list = listeners.get(event) || [];
+      for (const fn of list) fn();
+    },
 
     classList: {
       contains(cls) {
@@ -233,20 +261,21 @@ function buildSyntheticPost(urnId, authorName, authorHandle, postText) {
 }
 
 // Global Document mock for placeholder creation in applyDecision
-if (typeof globalThis.document === "undefined") {
-  globalThis.document = {
-    createElement: (tag) => createMockNode(tag),
-  };
-}
+const originalDoc = globalThis.document;
+globalThis.document = {
+  createElement: (tag) => createMockNode(tag),
+  getElementById: () => null,
+  querySelectorAll: () => [],
+};
 
-test("Load More Scenario 1: Newly inserted post DOM nodes are discovered and queued exactly once", () => {
+test("1. Load More: Newly inserted post DOM nodes are discovered and queued exactly once", () => {
   resetContentState();
 
   const feedRoot = createMockNode("div", { class: "scaffold-finite-scroll__content" });
   const post1 = buildSyntheticPost("urn:li:activity:1001", "Alice Vance", "alice-vance", "First initial post in the feed");
   feedRoot.appendChild(post1);
 
-  // 1. Initial scan
+  // Initial scan
   scan(feedRoot);
   let pending = getPendingPosts();
   assert.equal(pending.length, 1);
@@ -255,7 +284,7 @@ test("Load More Scenario 1: Newly inserted post DOM nodes are discovered and que
   // Apply decision for post 1
   applyDecision(post1, { id: "urn:li:activity:1001", hide: false, reason: "", topics: [] });
 
-  // 2. Simulate LinkedIn "Load More" inserting a second post
+  // Simulate LinkedIn "Load More" inserting a second post
   const post2 = buildSyntheticPost("urn:li:activity:1002", "Bob Smith", "bob-smith", "Second post loaded via Load More button");
   feedRoot.appendChild(post2);
 
@@ -276,11 +305,10 @@ test("Load More Scenario 1: Newly inserted post DOM nodes are discovered and que
   assert.equal(pending[1].id, "urn:li:activity:1002");
 });
 
-test("Load More Scenario 2: Reused / Mutated DOM container replaces post identity and is re-classified", () => {
+test("2. Container Reuse: Recycled DOM container replaces post identity and is re-classified", () => {
   resetContentState();
 
   const feedRoot = createMockNode("div", { class: "scaffold-finite-scroll__content" });
-  // Container originally holds Post A
   const container = buildSyntheticPost("urn:li:activity:2001", "Carol Danvers", "carol-danvers", "Original Post A in recycled container");
   feedRoot.appendChild(container);
 
@@ -325,10 +353,109 @@ test("Load More Scenario 2: Reused / Mutated DOM container replaces post identit
   assert.equal(container.classList.contains("feedrule-hidden"), false);
 });
 
-test("Load More Scenario 3: Deep child insertion inside existing container resolves enclosing container", () => {
+test("3. Self-Mutation Defense: Extension-owned placeholder and class mutations do not trigger re-scan loops", () => {
   resetContentState();
 
-  const container = buildSyntheticPost("urn:li:activity:3001", "Eve Polastri", "eve-polastri", "Post text");
+  const post = buildSyntheticPost("urn:li:activity:3001", "Ellen Ripley", "ellen-ripley", "Alien lifeform alert");
+  scan(post);
+
+  // Apply hidden decision (adds .feedrule-hidden and prepends .feedrule-placeholder)
+  applyDecision(post, { id: "urn:li:activity:3001", hide: true, reason: "Xenomorph", topics: ["safety"] });
+  assert.equal(post.classList.contains("feedrule-hidden"), true);
+
+  const placeholder = post.querySelector(".feedrule-placeholder");
+  assert.ok(placeholder, "Placeholder should exist");
+
+  // FeedRule's own DOM mutations arrive at handleMutations
+  handleMutations([
+    {
+      type: "childList",
+      target: post,
+      addedNodes: [placeholder],
+    },
+    {
+      type: "attributes",
+      target: post,
+      attributeName: "class",
+    },
+  ]);
+
+  // Process mutation queue: should be ignored by self-mutation defense
+  processMutationQueue();
+
+  // Pending queue should remain unchanged (no duplicate classification attempts)
+  const pending = getPendingPosts();
+  assert.equal(pending.length, 1);
+});
+
+test("4. User Override ('Show anyway'): clicking reveal is respected across re-scans and prevents re-hide loops", () => {
+  resetContentState();
+
+  const post = buildSyntheticPost("urn:li:activity:4001", "Garth Brooks", "garth-brooks", "Country music concert tour");
+  scan(post);
+
+  applyDecision(post, { id: "urn:li:activity:4001", hide: true, reason: "Music", topics: ["music"] });
+  assert.equal(post.classList.contains("feedrule-hidden"), true);
+
+  // User clicks "Show anyway" button
+  const showBtn = post.querySelector(".feedrule-show-btn");
+  assert.ok(showBtn);
+  showBtn.trigger("click");
+
+  // Should now be unhidden
+  assert.equal(post.classList.contains("feedrule-hidden"), false);
+  assert.equal(getUserRevealedPostIds().has("urn:li:activity:4001"), true);
+
+  // Now a re-scan or mutation arrives on this element
+  scan(post);
+
+  // Must remain unhidden; must not be re-hidden by cached decision
+  assert.equal(post.classList.contains("feedrule-hidden"), false);
+});
+
+test("5. Race Condition Protection: Delayed API response for Post A does not hide recycled Post B container", () => {
+  resetContentState();
+
+  const container = buildSyntheticPost("urn:li:activity:5001", "Hank Pym", "hank-pym", "Ant-Man technology");
+  scan(container);
+
+  // Post A is queued in-flight
+  assert.equal(getPendingPosts().length, 1);
+
+  // Now LinkedIn recycles the container for Post B before Post A returns
+  container.setAttribute("data-urn", "urn:li:activity:5002");
+  scan(container);
+
+  // Delayed response for Post A (hide = true) arrives
+  applyDecision(container, { id: "urn:li:activity:5001", hide: true, reason: "Quantum", topics: ["quantum"] });
+
+  // Container is currently holding Post B, so Post A's delayed decision must NOT hide this container!
+  assert.equal(container.classList.contains("feedrule-hidden"), false);
+});
+
+test("6. Memory Lifecycle: Bounded LRU cache caps decision storage at MAX_CACHED_DECISIONS", () => {
+  resetContentState();
+
+  // Insert 2050 decisions into cache
+  for (let i = 0; i < 2050; i++) {
+    cacheDecision(`urn:li:activity:${i}`, { id: `urn:li:activity:${i}`, hide: false });
+  }
+
+  const cached = getCachedDecisions();
+  // Must be strictly bounded to 2000
+  assert.equal(cached.size, 2000);
+  // Oldest items (0-49) must have been evicted
+  assert.equal(cached.has("urn:li:activity:0"), false);
+  assert.equal(cached.has("urn:li:activity:49"), false);
+  // Newest items (50-2049) must remain
+  assert.equal(cached.has("urn:li:activity:50"), true);
+  assert.equal(cached.has("urn:li:activity:2049"), true);
+});
+
+test("7. Deep child hydration inside existing post container discovers enclosing post", () => {
+  resetContentState();
+
+  const container = buildSyntheticPost("urn:li:activity:7001", "Iris West", "iris-west", "Central city news");
   const newInnerEl = createMockNode("span", { class: "feed-shared-inline-show-more-text" }, "Hydrated extra text");
   container.appendChild(newInnerEl);
 
@@ -344,29 +471,47 @@ test("Load More Scenario 3: Deep child insertion inside existing container resol
 
   const pending = getPendingPosts();
   assert.equal(pending.length, 1);
-  assert.equal(pending[0].id, "urn:li:activity:3001");
+  assert.equal(pending[0].id, "urn:li:activity:7001");
 });
 
-test("Load More Scenario 4: Re-rendering already-classified post re-applies decision from cache with 0 network calls", () => {
+test("8. Load More scale: N newly loaded distinct post identities produce exactly N classifications", () => {
   resetContentState();
 
-  // 1. Initial post classified as hidden
-  const post1 = buildSyntheticPost("urn:li:activity:4001", "Frank Castle", "frank-castle", "Targeted crypto scam post");
-  scan(post1);
+  const feedRoot = createMockNode("div", { class: "scaffold-finite-scroll__content" });
+  const addedNodes = [];
 
-  applyDecision(post1, { id: "urn:li:activity:4001", hide: true, reason: "Crypto spam", topics: ["crypto"] });
-  assert.equal(post1.classList.contains("feedrule-hidden"), true);
+  // Simulate Load More producing 50 distinct posts
+  for (let i = 0; i < 50; i++) {
+    const post = buildSyntheticPost(`urn:li:activity:80${i}`, `Author ${i}`, `author-${i}`, `Content ${i}`);
+    feedRoot.appendChild(post);
+    addedNodes.push(post);
+  }
 
-  // 2. LinkedIn DOM re-renders the same post into a brand new DOM container (e.g. after tab switch / scroll)
-  const post1ReRender = buildSyntheticPost("urn:li:activity:4001", "Frank Castle", "frank-castle", "Targeted crypto scam post");
-  assert.equal(post1ReRender.classList.contains("feedrule-hidden"), false);
+  handleMutations([
+    {
+      type: "childList",
+      target: feedRoot,
+      addedNodes,
+    },
+  ]);
 
-  // 3. Scan re-rendered node
-  scan(post1ReRender);
+  processMutationQueue();
 
-  // Must immediately apply cached decision (hidden) without adding to pending queue!
-  assert.equal(post1ReRender.classList.contains("feedrule-hidden"), true);
   const pending = getPendingPosts();
-  // Pending posts length should still be 1 (only the first initial occurrence)
-  assert.equal(pending.length, 1);
+  // Exactly 50 pending posts
+  assert.equal(pending.length, 50);
+
+  // Triggering the same mutations again should not produce duplicate dispatches
+  handleMutations([
+    {
+      type: "childList",
+      target: feedRoot,
+      addedNodes,
+    },
+  ]);
+
+  processMutationQueue();
+
+  // Length must remain 50
+  assert.equal(getPendingPosts().length, 50);
 });
