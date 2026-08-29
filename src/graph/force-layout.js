@@ -1,12 +1,86 @@
 // src/graph/force-layout.js
-// Lightweight, deterministic spring-embedder force simulation.
-// Zero external dependencies. Uses deterministic initial placement.
+// Lightweight, deterministic, adaptive spring-embedder force simulation.
+// Zero external dependencies. Uses scale-aware physics and collision modeling.
 
 export const PHYSICS_PRESETS = {
   compact: { repulsion: 400, springLength: 45, gravity: 0.05 },
   balanced: { repulsion: 900, springLength: 75, gravity: 0.025 },
   spread: { repulsion: 2000, springLength: 130, gravity: 0.01 },
 };
+
+/**
+ * Computes deterministic, scale-adapted simulation parameters from base user settings
+ * and active graph geometry.
+ *
+ * @param {Object} options
+ * @param {number} [options.nodeCount=10]
+ * @param {number} [options.edgeCount=10]
+ * @param {number} [options.width=800]
+ * @param {number} [options.height=600]
+ * @param {number} [options.repulsion=900]
+ * @param {number} [options.springLength=75]
+ * @param {number} [options.springStrength=0.06]
+ * @param {number} [options.gravity=0.025]
+ * @returns {Object} Effective physics parameters
+ */
+export function computeEffectivePhysics({
+  nodeCount = 10,
+  edgeCount = 10,
+  width = 800,
+  height = 600,
+  repulsion = PHYSICS_PRESETS.balanced.repulsion,
+  springLength = PHYSICS_PRESETS.balanced.springLength,
+  springStrength = 0.06,
+  gravity = PHYSICS_PRESETS.balanced.gravity,
+} = {}) {
+  const n = Math.max(nodeCount || 0, 1);
+  const e = Math.max(edgeCount || 0, 0);
+
+  // Scale adaptation factors
+  // 1. Repulsion scaling: Dampens O(N^2) pairwise buildup while preserving user separation intent
+  const scaleN = Math.sqrt(15 / Math.max(n, 15));
+  const densityFactor = 1 + Math.log10(1 + n / 20) * 0.5;
+  const effectiveRepulsion = repulsion * scaleN * densityFactor;
+
+  // 2. Spring length scaling: Prevents graph diameter explosion for high-N while ensuring local clearance
+  const lengthScale = Math.max(0.65, Math.min(1.35, 70 / (Math.sqrt(n) + 20)));
+  const effectiveSpringLength = springLength * lengthScale;
+
+  // 3. Gravity scaling: Softens central pull on large graphs to prevent dense core collapse
+  const gravityScale = Math.max(0.25, Math.min(1.5, 25 / (Math.sqrt(n) + 15)));
+  const effectiveGravity = gravity * gravityScale;
+
+  // 4. Spring strength scaling: Scales gently with graph connectivity
+  const avgDegree = e / n;
+  const strengthScale = Math.max(0.7, Math.min(1.3, 1 + (avgDegree - 2) * 0.05));
+  const effectiveSpringStrength = springStrength * strengthScale;
+
+  // 5. Alpha decay: Slightly slower cooling for large graphs to allow topological untangling
+  const effectiveAlphaDecay = Math.min(0.985, Math.max(0.965, 0.965 + n / 25000));
+
+  return {
+    effectiveRepulsion,
+    effectiveSpringLength,
+    effectiveSpringStrength,
+    effectiveGravity,
+    effectiveAlphaDecay,
+    collisionStrength: 0.6,
+  };
+}
+
+/**
+ * Calculates collision radius for a given graph node.
+ *
+ * @param {Object} node
+ * @returns {number} Node radius in pixels
+ */
+export function getNodeCollisionRadius(node) {
+  if (!node) return 7;
+  if (node.type === "post") return 7;
+  if (node.type === "topic") return Math.min(9 + (node.count || 1) * 1.5, 22);
+  if (node.type === "author") return Math.min(8 + (node.count || 1) * 1.5, 19);
+  return 7;
+}
 
 export class ForceLayout {
   constructor(options = {}) {
@@ -82,6 +156,7 @@ export class ForceLayout {
       const angle = (2 * Math.PI * i) / Math.max(n, 1);
       const simNode = {
         ...node,
+        radius: getNodeCollisionRadius(node),
         x: cx + radius * Math.cos(angle),
         y: cy + radius * Math.sin(angle),
         vx: 0,
@@ -113,14 +188,36 @@ export class ForceLayout {
     }
 
     const n = this.nodes.length;
+    const e = this.edges.length;
     const cx = this.width / 2;
     const cy = this.height / 2;
 
-    // 1. Repulsive forces between all node pairs
+    // Compute scale-adapted physics for current frame
+    const {
+      effectiveRepulsion,
+      effectiveSpringLength,
+      effectiveSpringStrength,
+      effectiveGravity,
+      effectiveAlphaDecay,
+      collisionStrength,
+    } = computeEffectivePhysics({
+      nodeCount: n,
+      edgeCount: e,
+      width: this.width,
+      height: this.height,
+      repulsion: this.repulsion,
+      springLength: this.springLength,
+      springStrength: this.springStrength,
+      gravity: this.gravity,
+    });
+
+    // 1. Repulsive forces + Collision avoidance between all node pairs
     for (let i = 0; i < n; i++) {
       const u = this.nodes[i];
+      const ur = u.radius || 7;
       for (let j = i + 1; j < n; j++) {
         const v = this.nodes[j];
+        const vr = v.radius || 7;
         let dx = v.x - u.x;
         let dy = v.y - u.y;
         let distSq = dx * dx + dy * dy;
@@ -131,7 +228,17 @@ export class ForceLayout {
         }
 
         const dist = Math.sqrt(distSq);
-        const force = (this.repulsion / (distSq + 100)) * this.alpha;
+        const minDist = ur + vr + 4;
+
+        // Base inverse-square repulsion with distance softening
+        let force = (effectiveRepulsion / (distSq + 100)) * this.alpha;
+
+        // Collision restoring force if overlapping
+        if (dist < minDist) {
+          const overlap = minDist - dist;
+          force += overlap * collisionStrength * this.alpha;
+        }
+
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
 
@@ -155,9 +262,12 @@ export class ForceLayout {
       let dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 0.1) dist = 0.1;
 
+      // Target rest length: respect effective spring length and combined node radii
+      const targetLength = Math.max((u.radius || 7) + (v.radius || 7) + 12, effectiveSpringLength);
+
       // Displacement from natural spring length
-      const displacement = dist - this.springLength;
-      const force = displacement * this.springStrength * this.alpha;
+      const displacement = dist - targetLength;
+      const force = displacement * effectiveSpringStrength * this.alpha;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
 
@@ -173,22 +283,34 @@ export class ForceLayout {
       }
     }
 
-    // 3. Center gravity and position integration
+    // 3. Center gravity, velocity clamping, damping, and position integration
+    const maxV = 30 * this.alpha + 6;
+
     for (const node of this.nodes) {
       if (node.pinned) continue;
 
       // Center gravity
-      node.vx += (cx - node.x) * this.gravity * this.alpha;
-      node.vy += (cy - node.y) * this.gravity * this.alpha;
+      node.vx += (cx - node.x) * effectiveGravity * this.alpha;
+      node.vy += (cy - node.y) * effectiveGravity * this.alpha;
 
-      // Damping and position update
+      // Damping
       node.vx *= this.damping;
       node.vy *= this.damping;
+
+      // Velocity clamping to prevent oscillation and runaway physics
+      const vMag = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+      if (vMag > maxV) {
+        const scale = maxV / vMag;
+        node.vx *= scale;
+        node.vy *= scale;
+      }
+
+      // Position update
       node.x += node.vx;
       node.y += node.vy;
     }
 
-    this.alpha *= this.alphaDecay;
+    this.alpha *= effectiveAlphaDecay;
     return this.alpha < this.alphaMin;
   }
 

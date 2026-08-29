@@ -7,7 +7,12 @@ import {
   filterGraphByNodeType,
   extractNeighborhood,
 } from "../src/graph/graph-builder.js";
-import { ForceLayout, PHYSICS_PRESETS } from "../src/graph/force-layout.js";
+import {
+  ForceLayout,
+  PHYSICS_PRESETS,
+  computeEffectivePhysics,
+  getNodeCollisionRadius,
+} from "../src/graph/force-layout.js";
 import { sanitizeSavedPost } from "../src/storage/saved-posts-store.js";
 
 test("buildKnowledgeGraph - handles empty dataset", () => {
@@ -461,4 +466,161 @@ test("Data Pipeline: Non-empty saved posts produce non-empty graph and default f
   assert.equal(mockSavedPosts.length, 2);
   assert.equal(mockSavedPosts[0].topics.length, 2);
   assert.equal(mockSavedPosts[1].topics.length, 2);
+});
+
+// =========================================================================
+// ADAPTIVE KNOWLEDGE GRAPH PHYSICS REGRESSION TESTS
+// =========================================================================
+
+test("computeEffectivePhysics - scales gracefully across small, medium, and large graph sizes", () => {
+  const scales = [10, 50, 100, 250, 500, 1000];
+
+  for (const n of scales) {
+    const eff = computeEffectivePhysics({
+      nodeCount: n,
+      edgeCount: n * 2,
+      width: 800,
+      height: 600,
+      repulsion: 900,
+      springLength: 75,
+      gravity: 0.025,
+    });
+
+    // 1. All effective values must be positive, finite numbers
+    assert.ok(typeof eff.effectiveRepulsion === "number" && isFinite(eff.effectiveRepulsion) && eff.effectiveRepulsion > 0);
+    assert.ok(typeof eff.effectiveSpringLength === "number" && isFinite(eff.effectiveSpringLength) && eff.effectiveSpringLength > 0);
+    assert.ok(typeof eff.effectiveGravity === "number" && isFinite(eff.effectiveGravity) && eff.effectiveGravity > 0);
+    assert.ok(typeof eff.effectiveAlphaDecay === "number" && eff.effectiveAlphaDecay >= 0.96 && eff.effectiveAlphaDecay <= 0.99);
+    assert.ok(typeof eff.collisionStrength === "number" && eff.collisionStrength > 0);
+  }
+
+  // 2. Large graph scales down per-node repulsion to prevent O(N^2) explosive buildup
+  const eff10 = computeEffectivePhysics({ nodeCount: 10, edgeCount: 15, repulsion: 900 });
+  const eff500 = computeEffectivePhysics({ nodeCount: 500, edgeCount: 1000, repulsion: 900 });
+  assert.ok(eff500.effectiveRepulsion < eff10.effectiveRepulsion, "Large graphs must have smaller per-node repulsion coefficient than small graphs");
+
+  // 3. Large graph scales down gravity to prevent central clumping
+  assert.ok(eff500.effectiveGravity < eff10.effectiveGravity, "Large graphs must have softer gravity than small graphs");
+});
+
+test("computeEffectivePhysics - strict monotonicity with respect to user sliders", () => {
+  const n = 100;
+  const e = 200;
+
+  // 1. Repulsion monotonicity: Higher slider -> strictly higher effectiveRepulsion
+  const repLow = computeEffectivePhysics({ nodeCount: n, edgeCount: e, repulsion: 400 });
+  const repMed = computeEffectivePhysics({ nodeCount: n, edgeCount: e, repulsion: 900 });
+  const repHigh = computeEffectivePhysics({ nodeCount: n, edgeCount: e, repulsion: 2000 });
+  assert.ok(repLow.effectiveRepulsion < repMed.effectiveRepulsion);
+  assert.ok(repMed.effectiveRepulsion < repHigh.effectiveRepulsion);
+
+  // 2. Spacing / SpringLength monotonicity: Higher slider -> strictly higher effectiveSpringLength
+  const lenLow = computeEffectivePhysics({ nodeCount: n, edgeCount: e, springLength: 45 });
+  const lenMed = computeEffectivePhysics({ nodeCount: n, edgeCount: e, springLength: 75 });
+  const lenHigh = computeEffectivePhysics({ nodeCount: n, edgeCount: e, springLength: 130 });
+  assert.ok(lenLow.effectiveSpringLength < lenMed.effectiveSpringLength);
+  assert.ok(lenMed.effectiveSpringLength < lenHigh.effectiveSpringLength);
+
+  // 3. Gravity monotonicity: Higher slider -> strictly higher effectiveGravity
+  const gravLow = computeEffectivePhysics({ nodeCount: n, edgeCount: e, gravity: 0.01 });
+  const gravMed = computeEffectivePhysics({ nodeCount: n, edgeCount: e, gravity: 0.025 });
+  const gravHigh = computeEffectivePhysics({ nodeCount: n, edgeCount: e, gravity: 0.05 });
+  assert.ok(gravLow.effectiveGravity < gravMed.effectiveGravity);
+  assert.ok(gravMed.effectiveGravity < gravHigh.effectiveGravity);
+});
+
+test("ForceLayout - collision non-overlap force pushes overlapping nodes apart", () => {
+  const layout = new ForceLayout({
+    repulsion: 0, // Isolate collision restoring force
+    gravity: 0,
+    springStrength: 0,
+  });
+
+  const nodes = [
+    { id: "node1", type: "topic", count: 10 }, // radius = min(9 + 15, 22) = 22
+    { id: "node2", type: "author", count: 5 },  // radius = min(8 + 7.5, 19) = 15.5
+  ];
+
+  layout.init(nodes, [], 800, 600);
+  const u = layout.nodeMap.get("node1");
+  const v = layout.nodeMap.get("node2");
+
+  // Place nodes on top of each other (distance = 5px < radius sum 37.5 + 4)
+  u.x = 400;
+  u.y = 300;
+  u.vx = 0;
+  u.vy = 0;
+
+  v.x = 405;
+  v.y = 300;
+  v.vx = 0;
+  v.vy = 0;
+
+  layout.tick();
+
+  // Collision force must push u to left (negative vx) and v to right (positive vx)
+  assert.ok(u.vx < 0, `Expected u.vx < 0 but got ${u.vx}`);
+  assert.ok(v.vx > 0, `Expected v.vx > 0 but got ${v.vx}`);
+});
+
+test("ForceLayout - large graph simulation (500 nodes) maintains numerical stability and bounded coordinates", () => {
+  const nodeCount = 500;
+  const mockPosts = Array.from({ length: 150 }, (_, i) => ({
+    id: `post-${i}`,
+    text: `Research post ${i} on deep distributed neural networks`,
+    author: `Author ${i % 20}`,
+    topics: [`Topic-${i % 15}`, `Topic-${(i + 1) % 15}`],
+  }));
+
+  const graph = buildKnowledgeGraph(mockPosts);
+  assert.ok(graph.nodes.length >= 170, `Expected at least 170 nodes, got ${graph.nodes.length}`);
+
+  const layout = new ForceLayout();
+  layout.init(graph.nodes, graph.edges, 1200, 900);
+
+  // Run 50 ticks
+  for (let i = 0; i < 50; i++) {
+    layout.tick();
+  }
+
+  // Assert all node coordinates are valid numbers and strictly finite
+  for (const node of layout.nodes) {
+    assert.ok(!isNaN(node.x), `Node ${node.id} has NaN x coordinate`);
+    assert.ok(!isNaN(node.y), `Node ${node.id} has NaN y coordinate`);
+    assert.ok(isFinite(node.x), `Node ${node.id} has non-finite x coordinate`);
+    assert.ok(isFinite(node.y), `Node ${node.id} has non-finite y coordinate`);
+
+    // Bounded coordinates check (should stay within reasonable screen neighborhood)
+    assert.ok(node.x > -2000 && node.x < 3200, `Node ${node.id} x coordinate exploded: ${node.x}`);
+    assert.ok(node.y > -2000 && node.y < 2900, `Node ${node.id} y coordinate exploded: ${node.y}`);
+  }
+});
+
+test("ForceLayout - determinism invariant (identical inputs produce identical simulation results)", () => {
+  const mockPosts = [
+    { id: "p1", text: "AI post 1", author: "Alice", topics: ["AI", "Robotics"] },
+    { id: "p2", text: "AI post 2", author: "Bob", topics: ["AI", "Vision"] },
+    { id: "p3", text: "Cloud post 3", author: "Charlie", topics: ["Cloud", "DevOps"] },
+  ];
+
+  const graph1 = buildKnowledgeGraph(mockPosts);
+  const layout1 = new ForceLayout();
+  layout1.init(graph1.nodes, graph1.edges, 800, 600);
+  for (let i = 0; i < 30; i++) layout1.tick();
+
+  const graph2 = buildKnowledgeGraph(mockPosts);
+  const layout2 = new ForceLayout();
+  layout2.init(graph2.nodes, graph2.edges, 800, 600);
+  for (let i = 0; i < 30; i++) layout2.tick();
+
+  assert.equal(layout1.nodes.length, layout2.nodes.length);
+  for (let i = 0; i < layout1.nodes.length; i++) {
+    const n1 = layout1.nodes[i];
+    const n2 = layout2.nodes[i];
+    assert.equal(n1.id, n2.id);
+    assert.equal(n1.x, n2.x);
+    assert.equal(n1.y, n2.y);
+    assert.equal(n1.vx, n2.vx);
+    assert.equal(n1.vy, n2.vy);
+  }
 });
