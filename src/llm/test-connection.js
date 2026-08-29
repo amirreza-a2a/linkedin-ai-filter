@@ -5,6 +5,7 @@
 import { validateAndNormalizeBaseUrl, resolveProviderEndpoint, getRequiredOriginPattern } from "./url-helper.js";
 import { logger } from "../utils/logger.js";
 import { sanitizeErrorMessage } from "../utils/sanitizer.js";
+import { appendApiLog } from "../storage/api-log-store.js";
 
 export { sanitizeErrorMessage };
 
@@ -225,6 +226,11 @@ export async function testProviderConnection({
     const endTs = typeof performance !== "undefined" ? performance.now() : Date.now();
     const latencyMs = Math.max(1, Math.round(endTs - startTs));
 
+    let endpointHost = "";
+    try {
+      endpointHost = new URL(endpoint).host;
+    } catch {}
+
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       const { errorCode, message } = normalizeTestError(res.status, errText);
@@ -236,6 +242,36 @@ export async function testProviderConnection({
         errorCode,
         latencyMs,
       });
+
+      await appendApiLog({
+        correlationId: `test_${startTs}_${Math.random().toString(36).slice(2, 7)}`,
+        ts: startTs,
+        completedAt: endTs,
+        logicalLatencyMs: latencyMs,
+        provider,
+        model: cleanModel,
+        operation: "testConnection",
+        itemCount: 1,
+        ok: false,
+        finalStatus: res.status,
+        finalErrorCode: errorCode,
+        finalErrorMessage: message,
+        totalAttempts: 1,
+        attempts: [
+          {
+            attemptIndex: 0,
+            keyIndex: 0,
+            keyLabel: "Test Key",
+            status: res.status,
+            ok: false,
+            startedAt: startTs,
+            latencyMs,
+            endpointHost,
+            errorCode,
+            errorMessage: message,
+          },
+        ],
+      }).catch(() => {});
 
       return {
         ok: false,
@@ -253,6 +289,32 @@ export async function testProviderConnection({
       latencyMs,
     });
 
+    await appendApiLog({
+      correlationId: `test_${startTs}_${Math.random().toString(36).slice(2, 7)}`,
+      ts: startTs,
+      completedAt: endTs,
+      logicalLatencyMs: latencyMs,
+      provider,
+      model: cleanModel,
+      operation: "testConnection",
+      itemCount: 1,
+      ok: true,
+      finalStatus: res.status,
+      totalAttempts: 1,
+      attempts: [
+        {
+          attemptIndex: 0,
+          keyIndex: 0,
+          keyLabel: "Test Key",
+          status: res.status,
+          ok: true,
+          startedAt: startTs,
+          latencyMs,
+          endpointHost,
+        },
+      ],
+    }).catch(() => {});
+
     return {
       ok: true,
       provider,
@@ -263,12 +325,48 @@ export async function testProviderConnection({
     const endTs = typeof performance !== "undefined" ? performance.now() : Date.now();
     const latencyMs = Math.max(1, Math.round(endTs - startTs));
 
+    let endpointHost = "";
+    try {
+      endpointHost = new URL(endpoint).host;
+    } catch {}
+
     if (fetchErr.name === "AbortError" || fetchErr.message?.includes("timeout")) {
+      const errMsg = `Connection timed out after ${Math.round(timeoutMs / 1000)}s`;
+      await appendApiLog({
+        correlationId: `test_${startTs}_${Math.random().toString(36).slice(2, 7)}`,
+        ts: startTs,
+        completedAt: endTs,
+        logicalLatencyMs: latencyMs,
+        provider,
+        model: cleanModel,
+        operation: "testConnection",
+        itemCount: 1,
+        ok: false,
+        finalStatus: 0,
+        finalErrorCode: "TIMEOUT",
+        finalErrorMessage: errMsg,
+        totalAttempts: 1,
+        attempts: [
+          {
+            attemptIndex: 0,
+            keyIndex: 0,
+            keyLabel: "Test Key",
+            status: 0,
+            ok: false,
+            startedAt: startTs,
+            latencyMs,
+            endpointHost,
+            errorCode: "TIMEOUT",
+            errorMessage: errMsg,
+          },
+        ],
+      }).catch(() => {});
+
       return {
         ok: false,
         provider,
         errorCode: "TIMEOUT",
-        message: `Connection timed out after ${Math.round(timeoutMs / 1000)}s`,
+        message: errMsg,
         latencyMs,
       };
     }
@@ -284,6 +382,36 @@ export async function testProviderConnection({
       latencyMs,
       errorName: fetchErr.name,
     });
+
+    await appendApiLog({
+      correlationId: `test_${startTs}_${Math.random().toString(36).slice(2, 7)}`,
+      ts: startTs,
+      completedAt: endTs,
+      logicalLatencyMs: latencyMs,
+      provider,
+      model: cleanModel,
+      operation: "testConnection",
+      itemCount: 1,
+      ok: false,
+      finalStatus: 0,
+      finalErrorCode: isNetwork ? "NETWORK_ERROR" : "REQUEST_FAILED",
+      finalErrorMessage: errMsg,
+      totalAttempts: 1,
+      attempts: [
+        {
+          attemptIndex: 0,
+          keyIndex: 0,
+          keyLabel: "Test Key",
+          status: 0,
+          ok: false,
+          startedAt: startTs,
+          latencyMs,
+          endpointHost,
+          errorCode: isNetwork ? "NETWORK_ERROR" : "REQUEST_FAILED",
+          errorMessage: errMsg,
+        },
+      ],
+    }).catch(() => {});
 
     return {
       ok: false,

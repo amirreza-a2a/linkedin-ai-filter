@@ -1,8 +1,7 @@
 // src/background/service-worker.js
-import { getProviderFn } from "../llm/factory.js";
+import { executeClassifyRequest } from "../llm/request-gateway.js";
 import {
   getSettings,
-  getPrimaryApiKey,
   getCachedDecisions,
   setCachedDecisions,
   incrementAndCheckDailyCap,
@@ -135,7 +134,7 @@ async function handleClassify(posts) {
   const rulesText = settings.rulesText || "";
   const saveRulesText = settings.saveRulesText || "";
   const baseUrl = settings.baseUrl?.[provider] || "";
-  const apiKey = getPrimaryApiKey(settings.apiKeys, provider);
+  const keys = settings.apiKeys?.[provider] || [];
 
   if (!settings.enabled || !rulesText.trim()) {
     const results = posts.map((p) => ({
@@ -186,7 +185,7 @@ async function handleClassify(posts) {
     }
   }
 
-  // If there are uncached posts, query the LLM provider
+  // If there are uncached posts, query the LLM provider via Request Gateway
   if (uncached.length > 0) {
     const withinCap = await incrementAndCheckDailyCap(settings.dailyCallCap);
     if (!withinCap) {
@@ -214,21 +213,25 @@ async function handleClassify(posts) {
         }
       }
 
-      const classifyFn = getProviderFn(provider);
-      const apiResults = await classifyFn({
-        apiKey,
+      const gatewayRes = await executeClassifyRequest({
+        provider,
+        keys,
         model,
         baseUrl,
         rulesText,
         posts: uniqueUncached.map((u) => u.post),
       });
 
-      const safeResults = Array.isArray(apiResults) ? apiResults : [];
-      const byId = new Map(safeResults.map((r) => [String(r.id), r]));
+      const apiResults = gatewayRes.ok && Array.isArray(gatewayRes.results) ? gatewayRes.results : [];
+      const byId = new Map(apiResults.map((r) => [String(r.id), r]));
       const toCache = {};
 
       for (const { post, hash } of uniqueUncached) {
-        const r = byId.get(String(post.id)) || { hide: false, reason: "missing", topics: [] };
+        const r = byId.get(String(post.id)) || {
+          hide: false,
+          reason: gatewayRes.finalErrorCode || "error-fail-open",
+          topics: [],
+        };
         const topics = Array.isArray(r.topics) ? r.topics : [];
         const saveEval = evaluateSaveRules(topics, saveRulesText);
 
@@ -245,14 +248,18 @@ async function handleClassify(posts) {
           };
         }
 
-        toCache[hash] = {
-          hide: r.hide === true,
-          reason: typeof r.reason === "string" ? r.reason : "",
-          topics,
-        };
+        if (gatewayRes.ok) {
+          toCache[hash] = {
+            hide: r.hide === true,
+            reason: typeof r.reason === "string" ? r.reason : "",
+            topics,
+          };
+        }
       }
 
-      await setCachedDecisions(toCache);
+      if (Object.keys(toCache).length > 0) {
+        await setCachedDecisions(toCache);
+      }
     }
   }
 

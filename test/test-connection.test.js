@@ -573,3 +573,64 @@ test("Contract Invariant: Host permission requests only trigger for custom Base 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Test Connection: Bypasses scheduler, does not mutate runtime health state, and logs operation = testConnection", async () => {
+  const { resetScheduler, getKeyPoolStatus } = await import("../src/llm/key-scheduler.js");
+  const { getApiLogs } = await import("../src/storage/api-log-store.js");
+  resetScheduler();
+
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const store = {};
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: async (keys) => {
+          if (!keys) return { ...store };
+          const out = {};
+          const keyList = Array.isArray(keys) ? keys : [keys];
+          for (const k of keyList) if (store[k] !== undefined) out[k] = store[k];
+          return out;
+        },
+        set: async (items) => Object.assign(store, items),
+        remove: async (keys) => {
+          const keyList = Array.isArray(keys) ? keys : [keys];
+          for (const k of keyList) delete store[k];
+        },
+      },
+    },
+  };
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ choices: [{ message: { content: "pong" } }] }),
+  });
+
+  try {
+    const res = await testProviderConnection({
+      provider: "openai",
+      apiKey: "sk-unsaved-test-key",
+      model: "gpt-4o-mini",
+    });
+
+    assert.equal(res.ok, true);
+
+    // Verify scheduler state was not touched
+    const pool = getKeyPoolStatus("openai", ["sk-prod-key-1"]);
+    assert.equal(pool[0].activeLeases, 0);
+    assert.equal(pool[0].failureCount, 0);
+    assert.equal(pool[0].lastUsed, 0);
+
+    // Verify logged operation is testConnection
+    const logs = await getApiLogs();
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].operation, "testConnection");
+    assert.equal(logs[0].ok, true);
+    assert.equal(logs[0].totalAttempts, 1);
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});

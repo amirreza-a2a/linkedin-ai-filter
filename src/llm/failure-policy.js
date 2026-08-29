@@ -16,6 +16,24 @@ import { sanitizeErrorMessage } from "../utils/sanitizer.js";
  */
 
 /**
+ * Detects whether an error message indicates monthly billing/credit quota exhaustion.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isQuotaError(text) {
+  if (!text || typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("quota") ||
+    lower.includes("insufficient_quota") ||
+    lower.includes("billing") ||
+    lower.includes("credit balance") ||
+    lower.includes("exceeded your current quota")
+  );
+}
+
+/**
  * Classifies an HTTP status code, raw error response body, or fetch error into a FailurePolicyDecision.
  *
  * @param {number} status - HTTP status code (or 0 for network/timeout)
@@ -24,20 +42,20 @@ import { sanitizeErrorMessage } from "../utils/sanitizer.js";
  */
 export function classifyFailure(status, errorOrText = "") {
   let errText = "";
-  let isTimeout = false;
+  let isClientTimeout = false;
   let isNetwork = false;
 
   if (errorOrText instanceof Error) {
     errText = errorOrText.message || "";
     if (errorOrText.name === "AbortError" || errText.toLowerCase().includes("timeout")) {
-      isTimeout = true;
+      isClientTimeout = true;
     } else if (errorOrText instanceof TypeError || errText.toLowerCase().includes("fetch")) {
       isNetwork = true;
     }
   } else if (typeof errorOrText === "string") {
     errText = errorOrText;
     if (errText.toLowerCase().includes("timeout") || errText.toLowerCase().includes("aborterror")) {
-      isTimeout = true;
+      isClientTimeout = true;
     }
   }
 
@@ -54,8 +72,8 @@ export function classifyFailure(status, errorOrText = "") {
 
   parsedMsg = sanitizeErrorMessage(parsedMsg);
 
-  // 1. Timeout / AbortError
-  if (isTimeout || status === 408 || status === 504) {
+  // 1. Client Timeout / AbortError
+  if (isClientTimeout || status === 408) {
     return {
       errorCode: "TIMEOUT",
       shouldFailover: true,
@@ -67,7 +85,20 @@ export function classifyFailure(status, errorOrText = "") {
     };
   }
 
-  // 2. Network / Client transport error (status = 0 or fetch failure)
+  // 2. HTTP 504 Gateway Timeout
+  if (status === 504) {
+    return {
+      errorCode: "GATEWAY_TIMEOUT",
+      shouldFailover: true,
+      maxFailovers: 1, // Cautious: try at most 1 alternate key
+      cooldownMs: 10000, // 10s cooldown
+      invalidateKey: false,
+      terminal: false,
+      message: parsedMsg ? `Gateway timeout (HTTP 504): ${parsedMsg}` : "Gateway timeout (HTTP 504)",
+    };
+  }
+
+  // 3. Network / Client transport error (status = 0 or fetch failure)
   if (isNetwork || status === 0) {
     return {
       errorCode: "NETWORK_ERROR",
@@ -80,7 +111,7 @@ export function classifyFailure(status, errorOrText = "") {
     };
   }
 
-  // 3. HTTP 401 Unauthorized (Invalid API Key)
+  // 4. HTTP 401 Unauthorized (Invalid API Key)
   if (status === 401) {
     return {
       errorCode: "INVALID_API_KEY",
@@ -93,7 +124,7 @@ export function classifyFailure(status, errorOrText = "") {
     };
   }
 
-  // 4. HTTP 403 Forbidden (Permission Denied / Tier restriction)
+  // 5. HTTP 403 Forbidden (Permission Denied / Tier restriction)
   if (status === 403) {
     return {
       errorCode: "PERMISSION_DENIED",
@@ -106,9 +137,9 @@ export function classifyFailure(status, errorOrText = "") {
     };
   }
 
-  // 5. HTTP 429 Too Many Requests (Rate Limit or Monthly Quota)
+  // 6. HTTP 429 Too Many Requests (Rate Limit or Monthly Quota)
   if (status === 429) {
-    const isQuota = parsedMsg.toLowerCase().includes("quota") || parsedMsg.toLowerCase().includes("insufficient");
+    const isQuota = isQuotaError(parsedMsg);
     const cooldownMs = isQuota ? 300000 : 30000; // 300s for quota exhaustion, 30s for short-term rate limit
 
     return {
