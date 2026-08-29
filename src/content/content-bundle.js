@@ -136,9 +136,34 @@
     // STAGE 1: HARD NEGATIVE REJECTIONS (Obvious Non-Post UI Components)
     // =========================================================================
   
+    // Evaluate genuine post boundary invariants to shield real posts from descendant false negatives
+    const hasInitialPostUrn = Boolean(
+      (el.getAttribute?.("data-urn") || "").includes("activity:") ||
+      (el.getAttribute?.("data-urn") || "").includes("ugcPost:") ||
+      (el.getAttribute?.("data-urn") || "").includes("sponsoredUpdate:") ||
+      (el.getAttribute?.("data-id") || "").includes("activity:")
+    );
+    const hasInitialSocialActions = Boolean(
+      el.querySelector?.(
+        ".feed-shared-social-actions, .feed-shared-social-action-bar, .feed-shared-social-action-bar__action-button, button[aria-label*='React Like'], button[aria-label*='Comment on']"
+      )
+    );
+    const hasInitialPostTimestamp = Boolean(
+      el.querySelector?.("time, .update-components-actor__sub-description, .feed-shared-actor__sub-description, time[datetime]")
+    );
+    const hasInitialControlMenu = Boolean(
+      el.querySelector?.(".feed-shared-control-menu, button[aria-label*='open control menu'], button[aria-label*='More options for post'], button[aria-label*='post by '], button[aria-label*='Post by ']")
+    );
+    const hasInitialPostBody = Boolean(
+      el.querySelector?.(".update-components-text, [data-testid='expandable-text-box'], .feed-shared-update-v2__description")
+    );
+  
+    const isGenuinePostStructure = hasInitialPostUrn || hasInitialSocialActions || hasInitialPostTimestamp || (hasInitialControlMenu && hasInitialPostBody);
+  
     // 1. "Start a post" / Composer UI
+    // Path 1A: Container itself is explicitly a composer boundary
     for (const sel of DISQUALIFIED_COMPOSER_SELECTORS) {
-      if (el.matches?.(sel) || el.classList?.contains?.(sel.replace(/^\./, "")) || el.querySelector?.(sel)) {
+      if (el.matches?.(sel) || el.classList?.contains?.(sel.replace(/^\./, ""))) {
         return {
           qualified: false,
           decision: "REJECT",
@@ -149,24 +174,36 @@
       }
     }
   
-    // Check 1B: Exact composer action combination (Start a post + Write article / Video / Photo)
-    const rawText = (el.innerText || el.textContent || "").trim();
-    const rawLower = rawText.toLowerCase();
-    if (
-      rawLower.includes("start a post") &&
-      (rawLower.includes("write article") || (rawLower.includes("video") && rawLower.includes("photo")))
-    ) {
-      const hasGenuinePostBody = Boolean(
-        el.querySelector?.(".update-components-text, [data-testid='expandable-text-box'], .feed-shared-update-v2__description")
-      );
-      if (!hasGenuinePostBody || rawText.length < 120) {
-        return {
-          qualified: false,
-          decision: "REJECT",
-          score: 0,
-          signals: { composer: true },
-          reason: "composer",
-        };
+    // Path 1B: Candidate lacks genuine post structure and contains internal composer structural markers
+    if (!isGenuinePostStructure) {
+      for (const sel of DISQUALIFIED_COMPOSER_SELECTORS) {
+        if (el.querySelector?.(sel)) {
+          return {
+            qualified: false,
+            decision: "REJECT",
+            score: 0,
+            signals: { composer: true },
+            reason: "composer",
+          };
+        }
+      }
+  
+      // Path 1C: Exact action combination heuristic on non-post container
+      const rawText = (el.innerText || el.textContent || "").trim();
+      const rawLower = rawText.toLowerCase();
+      if (
+        rawLower.includes("start a post") &&
+        (rawLower.includes("write article") || (rawLower.includes("video") && rawLower.includes("photo")))
+      ) {
+        if (!hasInitialPostBody || rawText.length < 120) {
+          return {
+            qualified: false,
+            decision: "REJECT",
+            score: 0,
+            signals: { composer: true },
+            reason: "composer",
+          };
+        }
       }
     }
   

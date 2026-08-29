@@ -293,6 +293,158 @@ test("Test F: Localized/modified composer text -> still REJECTED when structural
   assert.equal(res.reason, "composer");
 });
 
+// =========================================================================
+// ADVERSARIAL COMPOSER FALSE-NEGATIVE TESTS
+// =========================================================================
+
+test("Adversarial 1: Genuine post containing descendant with aria-label='Start a post', componentkey='sharebox', or draft-text ID -> MUST BE ACCEPTED", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/engineering-lead" }, [], "Engineering Lead");
+  const time = el("TIME", {}, [], "2d");
+  const socialActions = el("DIV", { class: "feed-shared-social-actions" }, [
+    el("BUTTON", { "aria-label": "React Like" }, [], "Like")
+  ]);
+  const nestedEmbed = el("DIV", { id: "draft-text-replaceable-component", componentkey: "shareboxProfilePictureComponentRef" }, [
+    el("BUTTON", { "aria-label": "Start a post" }, [], "Quote")
+  ]);
+  const text = el("DIV", { class: "update-components-text" }, [nestedEmbed], "Check out our latest architecture RFC.");
+  
+  const genuinePost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "adv_post_1",
+      "data-urn": "urn:li:activity:987654321",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, time, text, socialActions]
+  );
+
+  const res = isLikelyPostContainer(genuinePost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+  assert.notEqual(res.reason, "composer");
+});
+
+test("Adversarial 2: Genuine post whose body text contains all composer phrases ('Start a post', 'Video', 'Photo', 'Write article') -> MUST BE ACCEPTED", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/growth-expert" }, [], "Growth Expert");
+  const time = el("TIME", {}, [], "1w");
+  const text = el("DIV", { class: "update-components-text" }, [], 
+    "LinkedIn Strategy 2026: When you click Start a post, don't just share text. Upload a Video or Photo, and occasionally Write article to establish thought leadership across your network."
+  );
+  const socialActions = el("DIV", { class: "feed-shared-social-actions" }, [
+    el("BUTTON", { "aria-label": "React Like" }, [], "Like")
+  ]);
+  
+  const genuinePost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "adv_post_2",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, time, text, socialActions]
+  );
+
+  const res = isLikelyPostContainer(genuinePost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+  assert.notEqual(res.reason, "composer");
+});
+
+test("Adversarial 3: Genuine video post containing video player with video-related aria labels -> MUST BE ACCEPTED", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/company/tech-lab" }, [], "Tech Lab");
+  const time = el("TIME", {}, [], "3h");
+  const video = el("VIDEO", { src: "https://example.com/ai-demo.mp4", "aria-label": "Video Player" });
+  const text = el("DIV", { class: "update-components-text" }, [], "Watch our new real-time robotic vision demonstration in 4K 60fps.");
+  const socialActions = el("DIV", { class: "feed-shared-social-actions" }, [
+    el("BUTTON", { "aria-label": "React Like" }, [], "Like")
+  ]);
+
+  const videoPost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "adv_post_3",
+      class: "feed-shared-update-v2 feed-shared-update-v2--video",
+    },
+    [authorLink, time, video, text, socialActions]
+  );
+
+  const res = isLikelyPostContainer(videoPost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+  assert.notEqual(res.reason, "composer");
+});
+
+test("Adversarial 4: Genuine article post containing link to /article/new/ -> MUST BE ACCEPTED", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/tech-writer" }, [], "Tech Writer");
+  const time = el("TIME", {}, [], "5d");
+  const articleRef = el("A", { href: "https://www.linkedin.com/article/new/" }, [], "Draft your own article here");
+  const text = el("DIV", { class: "update-components-text" }, [articleRef], "I just published my annual distributed systems guide. You can also create yours at /article/new/.");
+  const socialActions = el("DIV", { class: "feed-shared-social-actions" }, [
+    el("BUTTON", { "aria-label": "React Like" }, [], "Like")
+  ]);
+
+  const articlePost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "adv_post_4",
+      "data-urn": "urn:li:activity:555444333",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, time, text, socialActions]
+  );
+
+  const res = isLikelyPostContainer(articlePost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+  assert.notEqual(res.reason, "composer");
+});
+
+test("Adversarial 5: Composer inside larger feed container -> Composer boundary rejected while surrounding post accepted", () => {
+  // Composer widget inside feed root
+  const composer = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "composer_boundary",
+      style: "display: contents;",
+    },
+    [
+      el("DIV", { id: "draft-text-replaceable-component", "aria-label": "Start a post" }, [], "Start a post"),
+      el("A", { href: "/article/new/" }, [], "Write article")
+    ],
+    "Start a post\n\nVideo\n\nPhoto\n\nWrite article"
+  );
+
+  // Normal post inside same feed root
+  const normalPost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "post_boundary",
+      "data-urn": "urn:li:activity:777888999",
+      class: "feed-shared-update-v2",
+    },
+    [
+      el("A", { href: "https://www.linkedin.com/in/alice" }, [], "Alice"),
+      el("TIME", {}, [], "1d"),
+      el("DIV", { class: "update-components-text" }, [], "Quantum computing breakthrough."),
+      el("DIV", { class: "feed-shared-social-actions" }, [
+        el("BUTTON", { "aria-label": "React Like" }, [], "Like")
+      ])
+    ]
+  );
+
+  const feedRoot = el("DIV", { role: "list" }, [composer, normalPost]);
+
+  // Composer must be REJECTED
+  const compRes = isLikelyPostContainer(composer);
+  assert.equal(compRes.qualified, false);
+  assert.equal(compRes.decision, "REJECT");
+  assert.equal(compRes.reason, "composer");
+
+  // Normal post must be ACCEPTED
+  const postRes = isLikelyPostContainer(normalPost);
+  assert.equal(postRes.qualified, true);
+  assert.equal(postRes.decision, "ACCEPT");
+});
+
 test("False-Positive Protection: Comments-Only Container -> REJECTED", () => {
   const comment1 = el("DIV", { class: "comments-comment-item" }, [
     el("A", { href: "https://www.linkedin.com/in/commenter" }, [], "Commenter"),
