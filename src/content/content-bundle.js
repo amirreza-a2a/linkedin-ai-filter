@@ -13,13 +13,22 @@
     if (typeof window !== "undefined" && Boolean(window.__FEEDRULE_DEBUG__)) return true;
     if (typeof globalThis !== "undefined" && Boolean(globalThis.__FEEDRULE_DEBUG__)) return true;
     if (typeof process !== "undefined" && Boolean(process.env?.FEEDRULE_DEBUG)) return true;
-    return false;
+    try {
+      if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
+      if (typeof localStorage !== "undefined" && localStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
+    } catch {}
+    return true; // Always output trace diagnostics during audit
   };
   
   const logger = {
     debug: (tag, ...args) => {
       if (isDebugEnabled()) {
         console.log(`[FeedRule][${tag}]`, ...args);
+      }
+    },
+    trace: (stage, details = "") => {
+      if (isDebugEnabled()) {
+        console.log(`[FeedRule][TRACE] ${stage} ${details}`.trim());
       }
     },
     info: (tag, ...args) => {
@@ -719,14 +728,13 @@
   const NON_FEED_ANCESTOR_SELECTOR = [
     "#global-nav",
     ".global-nav",
+    "header.global-nav",
     ".msg-overlay-container",
     ".msg-overlay-list-bubble",
     ".scaffold-layout__aside",
     "#artdeco-toasts__wormhole",
     ".feed-follows-module",
-    "aside",
-    "header",
-    "footer",
+    "footer.global-footer",
   ].join(", ");
   
   const FEED_ROOT_SELECTORS = [
@@ -917,7 +925,10 @@
     if (!doc || typeof doc.querySelector !== "function") return null;
     for (const sel of FEED_ROOT_SELECTORS) {
       const root = doc.querySelector(sel);
-      if (root) return root;
+      if (root) {
+        logger.trace("FEED_ROOT_FOUND", `selector=${sel}`);
+        return root;
+      }
     }
     return null;
   }
@@ -1040,6 +1051,7 @@
       canonicalNodes.push(node);
     }
   
+    logger.trace("CONTAINERS_FOUND", `count=${canonicalNodes.length}`);
     return canonicalNodes;
   }
   
@@ -1070,6 +1082,8 @@
   
   function applyDecision(el, decision) {
     if (!el || !decision) return;
+  
+    logger.trace("DECISION_APPLIED", `id=${decision.id} hide=${decision.hide} reason="${decision.reason || ""}"`);
   
     cacheDecision(decision.id, decision);
     inFlightPostIds.delete(decision.id);
@@ -1193,6 +1207,8 @@
       return;
     }
     performanceStats.classificationDispatches++;
+    logger.trace("CLASSIFY_DISPATCH", `count=${batch.length} ids=${JSON.stringify(batch.map((p) => p.id))}`);
+  
     for (const post of batch) elementById.set(post.id, post.el);
   
     if (elementById.size > performanceStats.inFlightElementMaxSize) {
@@ -1227,6 +1243,8 @@
           }
           logger.debug("CONTENT", "got response from background:", response);
           const results = response?.results || [];
+          logger.trace("CLASSIFY_RESPONSE", `count=${results.length}`);
+  
           for (const decision of results) {
             cacheDecision(decision.id, decision);
             inFlightPostIds.delete(decision.id);
@@ -1281,6 +1299,7 @@
   function flush() {
     if (pending.length === 0) return;
     const batch = pending.splice(0, pending.length);
+    logger.trace("FLUSH", `count=${batch.length}`);
     for (let i = 0; i < batch.length; i += BATCH_SIZE) {
       batchQueue.push(batch.slice(i, i + BATCH_SIZE));
     }
@@ -1309,6 +1328,8 @@
       // Two-Stage Post Qualification Layer
       const qual = isLikelyPostContainer(node);
   
+      logger.trace("QUALIFICATION", `decision=${qual.decision} score=${qual.score} reason=${qual.reason}`);
+  
       if (isDebugEnabled()) {
         const sigs = qual.signals || {};
         logger.debug(
@@ -1332,6 +1353,8 @@
         }
         continue;
       }
+  
+      logger.trace("POST_EXTRACTED", `id=${post.id} author="${post.author}"`);
   
       if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
         logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
@@ -1384,6 +1407,7 @@
       }
   
       // 3. Genuinely new post identity: queue for classification
+      logger.trace("POST_QUEUED", `id=${post.id}`);
       if (isDebugEnabled()) {
         logger.debug("CONTENT", `[POST] id=${post.id} decision=UNPROCESSED alreadyProcessed=false`);
       }
@@ -1391,6 +1415,10 @@
       inFlightPostIds.add(post.id);
       elementById.set(post.id, node);
       pending.push(post);
+    }
+  
+    if (pending.length > 0 && !flushTimer) {
+      flushTimer = setTimeout(flush, DEBOUNCE_MS);
     }
   
     const scanElapsed = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - scanStart;
@@ -1636,7 +1664,10 @@
       performanceStats.observerAttachCount++;
       performanceStats.currentObserverAttached = 1;
   
+      logger.trace("OBSERVER_ATTACHED", `root=${feedRoot.tagName || "ROOT"}`);
+  
       // Scan initial posts in this feed root
+      logger.trace("INITIAL_SCAN", `root=${feedRoot.tagName || "ROOT"}`);
       scan(feedRoot);
       if (pending.length > 0) {
         clearTimeout(flushTimer);
@@ -1661,6 +1692,29 @@
       clearInterval(feedRootPollTimer);
       feedRootPollTimer = null;
     }
+  }
+  
+  function dumpFeedRuleRuntimeState() {
+    const root = currentObservedFeedRoot;
+    const rootDesc = root
+      ? `${root.tagName?.toLowerCase() || "unknown"}${root.id ? "#" + root.id : ""}${root.className ? "." + String(root.className).split(" ").slice(0, 2).join(".") : ""}`
+      : "null";
+  
+    return `
+  FeedRule Runtime State
+  ────────────────────────
+  feedRoot: ${rootDesc}
+  observer: ${currentFeedObserver ? "attached" : "not attached"}
+  pending: ${pending.length}
+  inFlight: ${inFlightPostIds.size}
+  decisionCache: ${decisionsById.size}
+  revealedCount: ${userRevealedPostIds.size}
+  currentObserverAttached: ${performanceStats.currentObserverAttached}
+  observerAttachCount: ${performanceStats.observerAttachCount}
+  observerDisconnectCount: ${performanceStats.observerDisconnectCount}
+  scanCalls: ${performanceStats.scanCalls}
+  classificationDispatches: ${performanceStats.classificationDispatches}
+  `.trim();
   }
   
   function initFeedObserver(doc = typeof document !== "undefined" ? document : null) {
@@ -1691,6 +1745,12 @@
         logger.debug("CONTENT", "feed root not found within bounded initialization window");
       }
     }, 250);
+  }
+  
+  if (typeof window !== "undefined") {
+    window.__dumpFeedRuleState = () => console.log(dumpFeedRuleRuntimeState());
+    window.__getFeedRuleState = dumpFeedRuleRuntimeState;
+    window.addEventListener("popstate", () => initFeedObserver(document));
   }
   
   if (typeof document !== "undefined") {

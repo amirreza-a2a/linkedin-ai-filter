@@ -129,6 +129,8 @@ async function logResults(posts, results, provider, model, rulesText) {
 async function handleClassify(posts) {
   const settings = await getSettings();
 
+  logger.trace("SW_RECEIVED", `count=${posts.length} ids=${JSON.stringify(posts.map(p => p.id))}`);
+
   const provider = settings.provider || "openai";
   const model = settings.model?.[provider] || "";
   const rulesText = settings.rulesText || "";

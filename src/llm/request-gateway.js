@@ -62,6 +62,8 @@ export async function executeClassifyRequest({
   const normProvider = (provider || "openai").trim().toLowerCase();
   const adapter = PROVIDER_ADAPTERS[normProvider] || PROVIDER_ADAPTERS.openai;
 
+  logger.trace("GATEWAY_STARTED", `provider=${normProvider} keys=${keys.length} model=${model}`);
+
   // Handle local unauthenticated models (e.g. Ollama on OpenAI-compatible endpoint)
   const isCustomOpenAi = normProvider === "openai" && Boolean(baseUrl);
   const effectiveKeys = Array.isArray(keys) && keys.length > 0 ? keys : isCustomOpenAi ? [""] : [];
@@ -69,6 +71,7 @@ export async function executeClassifyRequest({
   if (effectiveKeys.length === 0) {
     finalErrorCode = "MISSING_API_KEY";
     finalErrorMessage = "API key is required";
+    logger.trace("GATEWAY_FAILED", "errorCode=MISSING_API_KEY");
   } else {
     // Attempt execution loop
     while (true) {
@@ -82,6 +85,7 @@ export async function executeClassifyRequest({
           attempts.length > 0
             ? (finalErrorMessage || "All available keys exhausted after failover")
             : "All configured API keys are invalid";
+        logger.trace("GATEWAY_FAILED", `errorCode=${finalErrorCode}`);
         break;
       }
 
@@ -92,6 +96,7 @@ export async function executeClassifyRequest({
         finalErrorMessage = `All configured API keys are currently in cooldown (retry in ${Math.ceil(
           (lease.cooldownRemainingMs || 0) / 1000
         )}s)`;
+        logger.trace("GATEWAY_FAILED", `errorCode=ALL_KEYS_COOLDOWN`);
         break;
       }
 
@@ -99,6 +104,8 @@ export async function executeClassifyRequest({
       const attemptIndex = attempts.length;
       const keyIndex = lease.keyIndex;
       excludedIndices.add(keyIndex); // Invariant 15: never reuse same key within logical request
+
+      logger.trace("KEY_SELECTED", `provider=${normProvider} keyIndex=${keyIndex}`);
 
       try {
         const res = await adapter({
@@ -109,6 +116,8 @@ export async function executeClassifyRequest({
           posts,
           timeoutMs,
         });
+
+        logger.trace("HTTP_ATTEMPT", `provider=${normProvider} attemptIndex=${attemptIndex} status=${res.status} ok=${res.ok}`);
 
         if (res.ok) {
           applySuccessOutcome(normProvider, keyIndex);
@@ -209,6 +218,8 @@ export async function executeClassifyRequest({
 
   const completedAt = Date.now();
   const logicalLatencyMs = Math.max(1, completedAt - startedAt);
+
+  logger.trace("HTTP_RESULT", `status=${finalStatus} ok=${logicalOk}`);
 
   // Invariant 8 & 9: Construct ONE single logical API log record with embedded attempts
   const logRecord = {
