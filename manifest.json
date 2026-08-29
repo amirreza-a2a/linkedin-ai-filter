@@ -36,23 +36,9 @@
         "https://www.linkedin.com/*",
         "https://linkedin.com/*"
       ],
-      "js": ["src/content/content-loader.js"],
+      "js": ["src/content/content-bundle.js"],
       "css": ["src/content/content.css"],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "src/content/content-index.js",
-        "src/content/post-qualifier.js",
-        "src/content/author-extractor.js",
-        "src/storage/saved-posts-store.js"
-      ],
-      "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*"
-      ]
     }
   ],
   "action": {
