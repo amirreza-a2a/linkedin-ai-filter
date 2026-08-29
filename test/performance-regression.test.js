@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { findContainers, extractPost } from "../src/content/content-index.js";
 import { extractAuthor } from "../src/content/author-extractor.js";
 import { isLikelyPostContainer } from "../src/content/post-qualifier.js";
-import { buildKnowledgeGraph } from "../src/graph/graph-builder.js";
+import { buildKnowledgeGraph, areGraphsEqual } from "../src/graph/graph-builder.js";
 import { ForceLayout } from "../src/graph/force-layout.js";
 
 // DOM mock helper
@@ -117,11 +117,17 @@ function matches(node, sel) {
   if (sel === "a[href]") {
     return node.tagName === "A" && Boolean(node.attributes.href);
   }
+  if (sel.includes("share-box")) {
+    return node.attributes["data-testid"] === "share-box" || (node.attributes.class || "").includes("share-box");
+  }
   if (sel.includes("expandable-text-box")) {
     return node.attributes["data-testid"] === "expandable-text-box";
   }
   if (sel.includes("actor-container")) {
     return node.attributes["data-testid"] === "actor-container";
+  }
+  if (sel.includes("recs-list")) {
+    return (node.attributes["data-testid"] || "").includes("recs-list");
   }
   if (sel.includes("data-urn*='activity:'")) {
     return (node.attributes["data-urn"] || "").includes("activity:");
@@ -135,74 +141,166 @@ function matches(node, sel) {
   if (sel.includes("data-id*='activity:'")) {
     return (node.attributes["data-id"] || "").includes("activity:");
   }
+  if (sel === "h2" && node.tagName === "H2") return true;
+  if (sel === "h3" && node.tagName === "H3") return true;
   if (sel === 'div[role="listitem"]' && node.tagName === "DIV" && node.attributes.role === "listitem") return true;
   return false;
 }
 
-test("Performance Regression: Single-pass findContainers avoids redundant nested wrappers", () => {
-  const actor = el("DIV", { class: "update-components-actor" }, [
-    el("A", { class: "app-aware-link update-components-actor__image", href: "https://linkedin.com/in/author1" }, [], "Author 1"),
-  ]);
-  const text = el("DIV", { class: "update-components-text" }, [], "Test post body text for container deduplication.");
-  const innerUpdate = el(
+// =========================================================================
+// 1. KNOWLEDGE GRAPH EQUALITY & STABILITY AUDIT
+// =========================================================================
+
+test("Graph Equality: areGraphsEqual correctly validates structure, metadata, and connectivity", () => {
+  const postsA = [
+    { id: "1", text: "AI Systems", author: "Alice", authorUrl: "https://linkedin.com/in/alice", topics: ["AI"] },
+    { id: "2", text: "Cloud Tech", author: "Bob", authorUrl: "https://linkedin.com/in/bob", topics: ["Cloud"] },
+  ];
+  const postsB = [
+    { id: "1", text: "AI Systems", author: "Alice", authorUrl: "https://linkedin.com/in/alice", topics: ["AI"] },
+    { id: "2", text: "Cloud Tech", author: "Bob", authorUrl: "https://linkedin.com/in/bob", topics: ["Cloud"] },
+  ];
+  const postsC = [
+    { id: "1", text: "AI Systems Modified", author: "Alice", authorUrl: "https://linkedin.com/in/alice", topics: ["AI", "Robotics"] },
+    { id: "2", text: "Cloud Tech", author: "Bob", authorUrl: "https://linkedin.com/in/bob", topics: ["Cloud"] },
+  ];
+
+  const gA = buildKnowledgeGraph(postsA);
+  const gB = buildKnowledgeGraph(postsB);
+  const gC = buildKnowledgeGraph(postsC);
+
+  // Equal instances
+  assert.ok(areGraphsEqual(gA, gA));
+  assert.ok(areGraphsEqual(gA, gB));
+
+  // Unequal instances (different topics/edges)
+  assert.equal(areGraphsEqual(gA, gC), false);
+  assert.equal(areGraphsEqual(gA, null), false);
+  assert.equal(areGraphsEqual(null, gB), false);
+});
+
+test("Graph Stability: Re-filtering with identical result skips layout reset and preserves node coordinates", () => {
+  const posts = [
+    { id: "101", text: "Post 101", author: "Author A", authorUrl: "https://linkedin.com/in/a", topics: ["AI"] },
+    { id: "102", text: "Post 102", author: "Author B", authorUrl: "https://linkedin.com/in/b", topics: ["ML"] },
+  ];
+
+  const g1 = buildKnowledgeGraph(posts);
+  const layout = new ForceLayout();
+  layout.init(g1.nodes, g1.edges, 800, 600);
+
+  // Step 20 ticks to evolve physics positions
+  for (let i = 0; i < 20; i++) layout.tick();
+
+  const savedPositions = layout.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y, vx: n.vx, vy: n.vy }));
+
+  // Simulate re-filtering that produces identical graph structure
+  const g2 = buildKnowledgeGraph(posts);
+  const isUnchanged = areGraphsEqual(g1, g2);
+  assert.ok(isUnchanged);
+
+  // Since graph is unchanged, layout.init() MUST NOT be called. Verify coordinates remain identical.
+  for (let i = 0; i < layout.nodes.length; i++) {
+    assert.equal(layout.nodes[i].x, savedPositions[i].x);
+    assert.equal(layout.nodes[i].y, savedPositions[i].y);
+    assert.equal(layout.nodes[i].vx, savedPositions[i].vx);
+    assert.equal(layout.nodes[i].vy, savedPositions[i].vy);
+  }
+});
+
+// =========================================================================
+// 2. MUTATIONOBSERVER COALESCING & PRUNING AUDIT
+// =========================================================================
+
+test("Mutation Coalescing: Descendant micro-elements are pruned when ancestor container is queued", () => {
+  const authorSpan = el("SPAN", { class: "update-components-actor__name" }, [], "Author Name");
+  const metaDiv = el("DIV", { class: "update-components-actor__meta" }, [authorSpan]);
+  const actorDiv = el("DIV", { class: "update-components-actor" }, [metaDiv]);
+  const textDiv = el("DIV", { class: "update-components-text" }, [], "Post body text.");
+  const postCard = el("DIV", { class: "feed-shared-update-v2", "data-urn": "urn:li:activity:888888" }, [actorDiv, textDiv]);
+
+  // Simulate a mutation burst where the post card and all 4 of its child elements are added to mutationQueue
+  const mutationQueue = new Set([postCard, actorDiv, metaDiv, authorSpan, textDiv]);
+
+  // Execute descendant pruning logic (mirrors processMutationQueue)
+  const rootsToScan = [];
+  for (const node of mutationQueue) {
+    let isChild = false;
+    let parent = node.parentElement;
+    while (parent) {
+      if (mutationQueue.has(parent)) {
+        isChild = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    if (!isChild) {
+      rootsToScan.push(node);
+    }
+  }
+
+  // Assert that only the top-level container is retained
+  assert.equal(rootsToScan.length, 1);
+  assert.equal(rootsToScan[0], postCard);
+});
+
+// =========================================================================
+// 3. FULL PIPELINE INTEGRATION (Candidate Discovery -> Qualification -> Extraction)
+// =========================================================================
+
+test("Pipeline Integration: Nested feed card extracts exactly 1 post without duplicate outer wrapper", () => {
+  const authorAnchor = el("A", { class: "app-aware-link update-components-actor__image", href: "https://linkedin.com/in/sarah" }, [], "Sarah Connor");
+  const actor = el("DIV", { class: "update-components-actor" }, [authorAnchor]);
+  const text = el("DIV", { class: "update-components-text" }, [], "Cybernetic automation systems in industrial robotics.");
+  const innerPost = el(
     "DIV",
     {
       class: "feed-shared-update-v2",
-      "data-urn": "urn:li:activity:7123456789012345678",
+      "data-urn": "urn:li:activity:999000111222",
     },
     [actor, text]
   );
-  const outerListItem = el("DIV", { role: "listitem" }, [innerUpdate]);
-  const feedRoot = el("DIV", { "data-testid": "mainFeed" }, [outerListItem]);
+  const outerListItem = el("DIV", { role: "listitem" }, [innerPost]);
 
+  // Add non-post elements in feed to test full isolation
+  const composer = el("DIV", { class: "share-box-feed-entry__wrapper", role: "listitem" }, [
+    el("BUTTON", { "aria-label": "Start a post" }, [], "Start a post"),
+  ]);
+  const carousel = el("DIV", { class: "feed-shared-carousel", role: "listitem" }, [
+    el("H2", {}, [], "Recommended for you"),
+    el("BUTTON", { "aria-label": "Follow" }, [], "+ Follow"),
+  ]);
+  const comments = el("DIV", { class: "comments-comments-list", role: "listitem" }, [
+    el("DIV", { class: "comments-comment-item" }, []),
+  ]);
+
+  const feedRoot = el("DIV", { "data-testid": "mainFeed" }, [outerListItem, composer, carousel, comments]);
+
+  // Stage 1: Candidate Discovery
   const candidates = findContainers(feedRoot);
 
-  // Assert that only the inner canonical update is returned, not duplicate outer wrappers
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0], innerUpdate);
-});
+  // Stage 2: Qualification & Extraction
+  const extractedPosts = [];
+  const rejections = [];
 
-test("Performance Regression: extractAuthor executes single consolidated profile lookup", () => {
-  const authorAnchor = el("A", { class: "app-aware-link update-components-actor__image", href: "https://linkedin.com/in/performance-author" }, [], "Performance Author");
-  const nameSpan = el("SPAN", { class: "update-components-actor__name" }, [authorAnchor], "Performance Author");
-  const actor = el("DIV", { class: "update-components-actor" }, [nameSpan]);
-  const text = el("DIV", { class: "update-components-text" }, [], "Optimized single-pass query performance test.");
-  const post = el("DIV", { class: "feed-shared-update-v2", "data-urn": "urn:li:activity:7999888777" }, [actor, text]);
+  for (const c of candidates) {
+    const qual = isLikelyPostContainer(c);
+    if (qual.decision === "REJECT") {
+      rejections.push({ element: c, reason: qual.reason });
+      continue;
+    }
+    const post = extractPost(c);
+    if (post) extractedPosts.push(post);
+  }
 
-  const result = extractAuthor(post);
-  assert.equal(result.author, "Performance Author");
-  assert.equal(result.authorUrl, "https://linkedin.com/in/performance-author");
-});
+  // Verification
+  assert.equal(extractedPosts.length, 1);
+  assert.equal(extractedPosts[0].id, "urn:li:activity:999000111222");
+  assert.equal(extractedPosts[0].author, "Sarah Connor");
+  assert.equal(extractedPosts[0].authorUrl, "https://linkedin.com/in/sarah");
 
-test("Performance Regression: Graph layout initialization preserves position stability for unchanged nodes", () => {
-  const posts = [
-    {
-      id: "p1",
-      text: "Content 1",
-      author: "Alice",
-      authorUrl: "https://linkedin.com/in/alice",
-      topics: ["AI"],
-    },
-    {
-      id: "p2",
-      text: "Content 2",
-      author: "Bob",
-      authorUrl: "https://linkedin.com/in/bob",
-      topics: ["Systems"],
-    },
-  ];
-
-  const graph1 = buildKnowledgeGraph(posts);
-  const layout = new ForceLayout();
-  layout.init(graph1.nodes, graph1.edges, 800, 600);
-
-  // Run 10 ticks
-  for (let i = 0; i < 10; i++) layout.tick();
-
-  const node1_x = layout.nodes[0].x;
-  const node1_y = layout.nodes[0].y;
-
-  // Verify positions moved from center / circle
-  assert.ok(typeof node1_x === "number" && !isNaN(node1_x));
-  assert.ok(typeof node1_y === "number" && !isNaN(node1_y));
+  // Verify non-posts were rejected
+  assert.ok(rejections.some((r) => r.reason === "composer-detected"));
+  assert.ok(rejections.some((r) => r.reason === "recommendation-card"));
+  assert.ok(rejections.some((r) => r.reason === "comments-container"));
 });

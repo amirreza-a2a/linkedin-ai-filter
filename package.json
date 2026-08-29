@@ -4,6 +4,7 @@
   "description": "Custom AI Filter for LinkedIn Chrome Extension",
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "bench": "node test/benchmark.js"
   }
 }

@@ -1,5 +1,6 @@
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLikelyPostContainer } from "../src/content/post-qualifier.js";
-import { extractPost, findContainers, hashText } from "../src/content/content-index.js";
+import { extractPost, findContainers } from "../src/content/content-index.js";
 import { extractAuthor } from "../src/content/author-extractor.js";
 import { buildKnowledgeGraph } from "../src/graph/graph-builder.js";
 import { ForceLayout } from "../src/graph/force-layout.js";
@@ -146,24 +147,37 @@ function matches(node, sel) {
   return false;
 }
 
-export function runBenchmark() {
-  console.log("=== FEEDRULE PIPELINE BENCHMARK ===");
+/**
+ * Builds a deterministic synthetic feed tree with exact distribution of posts vs non-post widgets.
+ *
+ * @param {number} totalCandidates Total item count
+ */
+function buildSyntheticFeed(totalCandidates) {
+  const postCount = Math.round(totalCandidates * 0.6);
+  const recsCount = Math.round(totalCandidates * 0.2);
+  const composerCount = Math.round(totalCandidates * 0.1);
+  const commentsCount = totalCandidates - postCount - recsCount - composerCount;
 
-  // 1. Build a realistic 100-item DOM feed:
-  // - 60 Real posts (various formats: normal, repost, sponsored, with & without URNs)
-  // - 20 Recommendation carousels / PYMK cards
-  // - 10 "Start a post" composers
-  // - 10 Comments sections
   const items = [];
 
-  // 60 Real Posts
-  for (let i = 0; i < 60; i++) {
-    const authorAnchor = el("A", { class: "app-aware-link update-components-actor__image", href: `https://linkedin.com/in/author-${i % 15}` }, [], `Author ${i % 15}`);
-    const nameSpan = el("SPAN", { class: "update-components-actor__name" }, [authorAnchor], `Author ${i % 15}`);
+  // 1. Real Posts
+  for (let i = 0; i < postCount; i++) {
+    const authorAnchor = el(
+      "A",
+      { class: "app-aware-link update-components-actor__image", href: `https://linkedin.com/in/author-${i % 25}` },
+      [],
+      `Author ${i % 25}`
+    );
+    const nameSpan = el("SPAN", { class: "update-components-actor__name" }, [authorAnchor], `Author ${i % 25}`);
     const metaDiv = el("DIV", { class: "update-components-actor__meta" }, [nameSpan]);
     const actorDiv = el("DIV", { class: "update-components-actor" }, [metaDiv]);
-    const textDiv = el("DIV", { class: "update-components-text" }, [], `Post content number ${i}: Exploring distributed AI agents and systems architectures in production.`);
-    const menuBtn = el("BUTTON", { "aria-label": `Open control menu for post by Author ${i % 15}` }, []);
+    const textDiv = el(
+      "DIV",
+      { class: "update-components-text" },
+      [],
+      `Post content ${i}: Evaluating large language model architectures and deterministic graph physics in production.`
+    );
+    const menuBtn = el("BUTTON", { "aria-label": `Open control menu for post by Author ${i % 25}` }, []);
 
     const postCard = el(
       "DIV",
@@ -177,8 +191,8 @@ export function runBenchmark() {
     items.push(postCard);
   }
 
-  // 20 Recommendation Carousels
-  for (let i = 0; i < 20; i++) {
+  // 2. Recommendation Carousels
+  for (let i = 0; i < recsCount; i++) {
     const h2 = el("H2", {}, [], "Recommended for you");
     const recCards = [1, 2, 3].map((r) =>
       el("DIV", { class: "feed-shared-actor-recommendation" }, [
@@ -189,14 +203,14 @@ export function runBenchmark() {
     items.push(el("DIV", { class: "feed-shared-carousel", role: "listitem" }, [h2, ...recCards]));
   }
 
-  // 10 Composers
-  for (let i = 0; i < 10; i++) {
+  // 3. Composers
+  for (let i = 0; i < composerCount; i++) {
     const btn = el("BUTTON", { "aria-label": "Start a post, try writing with AI" }, [], "Start a post");
     items.push(el("DIV", { class: "share-box-feed-entry__wrapper", role: "listitem" }, [btn]));
   }
 
-  // 10 Comments containers
-  for (let i = 0; i < 10; i++) {
+  // 4. Comments Containers
+  for (let i = 0; i < commentsCount; i++) {
     const commentItem = el("DIV", { class: "comments-comment-item" }, [
       el("A", { href: `https://linkedin.com/in/commenter-${i}` }, [], `Commenter ${i}`),
     ]);
@@ -204,112 +218,139 @@ export function runBenchmark() {
   }
 
   const feedRoot = el("DIV", { "data-testid": "mainFeed" }, items);
-
-  // --- Step A: findContainers benchmark ---
-  const t0 = performance.now();
-  const containers = findContainers(feedRoot);
-  const t1 = performance.now();
-
-  // --- Step B: Post Qualification & Extraction benchmark ---
-  let accepted = 0;
-  let ambiguous = 0;
-  let rejected = 0;
-  const extractedPosts = [];
-
-  const t2 = performance.now();
-  for (const c of containers) {
-    const qual = isLikelyPostContainer(c);
-    if (qual.decision === "ACCEPT") accepted++;
-    else if (qual.decision === "AMBIGUOUS") ambiguous++;
-    else rejected++;
-
-    if (qual.decision !== "REJECT") {
-      const post = extractPost(c);
-      if (post) extractedPosts.push(post);
-    }
-  }
-  const t3 = performance.now();
-
-  // --- Step C: extractAuthor alone on 60 real posts ---
-  const t4 = performance.now();
-  for (let i = 0; i < 60; i++) {
-    extractAuthor(items[i]);
-  }
-  const t5 = performance.now();
-
-  // --- Step D: Knowledge Graph benchmark (200 posts) ---
-  const mockSavedPosts = Array.from({ length: 200 }, (_, i) => ({
-    id: `post-${i}`,
-    text: `Post content number ${i} with AI and systems design concepts.`,
-    author: `Author ${i % 25}`,
-    authorUrl: `https://linkedin.com/in/author-${i % 25}`,
-    topics: [`Topic-${i % 12}`, `Topic-${(i + 1) % 12}`],
-    savedAt: Date.now() - i * 3600000,
-  }));
-
-  const t6 = performance.now();
-  const graph = buildKnowledgeGraph(mockSavedPosts);
-  const t7 = performance.now();
-
-  // --- Step E: Force Layout benchmark (50 ticks) ---
-  const layout = new ForceLayout();
-  layout.init(graph.nodes, graph.edges, 800, 600);
-  const t8 = performance.now();
-  for (let step = 0; step < 50; step++) {
-    layout.tick();
-  }
-  const t9 = performance.now();
-
-  // --- Step F: Dashboard Analytics (500 entries) ---
-  const mockLog = Array.from({ length: 500 }, (_, i) => ({
-    id: `post-${i}`,
-    textSnippet: `Post snippet ${i}`,
-    hide: i % 4 === 0,
-    reason: i % 4 === 0 ? "Filtered" : "",
-    topics: [`Topic-${i % 8}`],
-    saved: i % 6 === 0,
-    saveReason: i % 6 === 0 ? "Saved" : "",
-    autoSaved: true,
-    provider: "openai",
-    model: "gpt-4o-mini",
-    rulesText: "Rules",
-    ts: Date.now() - i * 1800000,
-  }));
-
-  const t10 = performance.now();
-  const analytics = computeDashboardAnalytics(mockLog, { status: "all", topic: "", dateRange: "all", searchQuery: "" });
-  const t11 = performance.now();
-
-  const metrics = {
-    dom: {
-      totalCandidatesDiscovered: containers.length,
-      findContainersMs: Number((t1 - t0).toFixed(3)),
-      qualifyAndExtractMs: Number((t3 - t2).toFixed(3)),
-      avgCandidateMs: Number(((t3 - t2) / (containers.length || 1)).toFixed(4)),
-      acceptedCount: accepted,
-      ambiguousCount: ambiguous,
-      rejectedCount: rejected,
-      extractedPostsCount: extractedPosts.length,
-      extractAuthor60Ms: Number((t5 - t4).toFixed(3)),
-      avgExtractAuthorMs: Number(((t5 - t4) / 60).toFixed(4)),
-    },
-    graph: {
-      postsCount: mockSavedPosts.length,
-      nodesCount: graph.nodes.length,
-      edgesCount: graph.edges.length,
-      buildGraphMs: Number((t7 - t6).toFixed(3)),
-      layoutInitMs: Number((t8 - t7).toFixed(3)),
-      layout50TicksMs: Number((t9 - t8).toFixed(3)),
-      avgLayoutTickMs: Number(((t9 - t8) / 50).toFixed(4)),
-    },
-    analytics: {
-      entriesCount: mockLog.length,
-      computeAnalyticsMs: Number((t11 - t10).toFixed(3)),
-    },
-  };
-
-  console.log(JSON.stringify(metrics, null, 2));
-  return metrics;
+  return { feedRoot, items, postCount, recsCount, composerCount, commentsCount };
 }
 
-runBenchmark();
+/**
+ * Runs the deterministic multi-scale performance benchmark.
+ *
+ * @param {number[]} [scales=[100, 500, 1000]]
+ */
+export function runBenchmark(scales = [100, 500, 1000]) {
+  console.log("================================================================================");
+  console.log("           FEEDRULE MULTI-SCALE PERFORMANCE BENCHMARK (SYNTHETIC DOM)           ");
+  console.log("================================================================================");
+
+  const results = {};
+
+  for (const scale of scales) {
+    console.log(`\n▶ Benchmarking scale: ${scale} candidates...`);
+    const { feedRoot, items, postCount } = buildSyntheticFeed(scale);
+
+    // 1. Candidate Discovery
+    const t0 = performance.now();
+    const containers = findContainers(feedRoot);
+    const t1 = performance.now();
+
+    // 2. Post Qualification & Extraction
+    let accepted = 0;
+    let ambiguous = 0;
+    let rejected = 0;
+    const extractedPosts = [];
+
+    const t2 = performance.now();
+    for (const c of containers) {
+      const qual = isLikelyPostContainer(c);
+      if (qual.decision === "ACCEPT") accepted++;
+      else if (qual.decision === "AMBIGUOUS") ambiguous++;
+      else rejected++;
+
+      if (qual.decision !== "REJECT") {
+        const post = extractPost(c);
+        if (post) extractedPosts.push(post);
+      }
+    }
+    const t3 = performance.now();
+
+    // 3. extractAuthor Throughput on all genuine posts
+    const t4 = performance.now();
+    for (let i = 0; i < postCount; i++) {
+      extractAuthor(items[i]);
+    }
+    const t5 = performance.now();
+
+    // 4. Knowledge Graph Build & Layout Simulation
+    const mockSavedPosts = Array.from({ length: postCount }, (_, i) => ({
+      id: `post-${i}`,
+      text: `Post content number ${i} with systems architecture concepts.`,
+      author: `Author ${i % 25}`,
+      authorUrl: `https://linkedin.com/in/author-${i % 25}`,
+      topics: [`Topic-${i % 12}`, `Topic-${(i + 1) % 12}`],
+      savedAt: Date.now() - i * 3600000,
+    }));
+
+    const t6 = performance.now();
+    const graph = buildKnowledgeGraph(mockSavedPosts);
+    const t7 = performance.now();
+
+    const layout = new ForceLayout();
+    layout.init(graph.nodes, graph.edges, 800, 600);
+    const t8 = performance.now();
+    for (let step = 0; step < 50; step++) {
+      layout.tick();
+    }
+    const t9 = performance.now();
+
+    // 5. Analytics Calculation (capped at 500 entries)
+    const logEntriesCount = Math.min(scale, 500);
+    const mockLog = Array.from({ length: logEntriesCount }, (_, i) => ({
+      id: `post-${i}`,
+      textSnippet: `Post snippet ${i}`,
+      hide: i % 4 === 0,
+      reason: i % 4 === 0 ? "Filtered" : "",
+      topics: [`Topic-${i % 8}`],
+      saved: i % 6 === 0,
+      saveReason: i % 6 === 0 ? "Saved" : "",
+      autoSaved: true,
+      provider: "openai",
+      model: "gpt-4o-mini",
+      rulesText: "Rules",
+      ts: Date.now() - i * 1800000,
+    }));
+
+    const t10 = performance.now();
+    computeDashboardAnalytics(mockLog, { status: "all", topic: "", dateRange: "all", searchQuery: "" });
+    const t11 = performance.now();
+
+    const scaleResult = {
+      scale,
+      dom: {
+        totalCandidates: containers.length,
+        findContainersMs: Number((t1 - t0).toFixed(3)),
+        qualifyAndExtractMs: Number((t3 - t2).toFixed(3)),
+        avgCandidateMs: Number(((t3 - t2) / (containers.length || 1)).toFixed(4)),
+        acceptedCount: accepted,
+        ambiguousCount: ambiguous,
+        rejectedCount: rejected,
+        extractedPostsCount: extractedPosts.length,
+        extractAuthorMs: Number((t5 - t4).toFixed(3)),
+        avgExtractAuthorMs: Number(((t5 - t4) / (postCount || 1)).toFixed(4)),
+      },
+      graph: {
+        nodesCount: graph.nodes.length,
+        edgesCount: graph.edges.length,
+        buildGraphMs: Number((t7 - t6).toFixed(3)),
+        layoutInitMs: Number((t8 - t7).toFixed(3)),
+        layout50TicksMs: Number((t9 - t8).toFixed(3)),
+        avgTickMs: Number(((t9 - t8) / 50).toFixed(4)),
+      },
+      analytics: {
+        entriesCount: logEntriesCount,
+        computeAnalyticsMs: Number((t11 - t10).toFixed(3)),
+      },
+    };
+
+    results[scale] = scaleResult;
+    console.log(JSON.stringify(scaleResult, null, 2));
+  }
+
+  console.log("\n================================================================================");
+  console.log("                           BENCHMARK EXECUTION COMPLETE                         ");
+  console.log("================================================================================");
+  return results;
+}
+
+// Execute benchmark ONLY when run directly via CLI (e.g. node test/benchmark.js or npm run bench)
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  runBenchmark([100, 500, 1000]);
+}

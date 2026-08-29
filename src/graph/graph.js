@@ -5,6 +5,7 @@ import {
   buildKnowledgeGraph,
   filterGraphByNodeType,
   extractNeighborhood,
+  areGraphsEqual,
 } from "./graph-builder.js";
 import { ForceLayout, PHYSICS_PRESETS } from "./force-layout.js";
 import { GraphRenderer } from "./graph-renderer.js";
@@ -235,18 +236,6 @@ function updateFilterDropdowns(posts) {
           `<option value="${escapeXml(a)}" ${a.toLowerCase() === currentAuthor.toLowerCase() ? "selected" : ""}>${escapeXml(a)}</option>`
       )
       .join("");
-}
-
-function areGraphsEqual(g1, g2) {
-  if (!g1 || !g2) return false;
-  if (g1.nodes.length !== g2.nodes.length || g1.edges.length !== g2.edges.length) return false;
-  for (let i = 0; i < g1.nodes.length; i++) {
-    if (g1.nodes[i].id !== g2.nodes[i].id) return false;
-  }
-  for (let i = 0; i < g1.edges.length; i++) {
-    if (g1.edges[i].id !== g2.edges[i].id) return false;
-  }
-  return true;
 }
 
 function updateGraph() {

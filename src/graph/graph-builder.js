@@ -199,3 +199,48 @@ export function extractNeighborhood(graph, targetNodeId) {
 
   return { nodes: neighborhoodNodes, edges: neighborhoodEdges };
 }
+
+/**
+ * Determines whether two Knowledge Graph instances are structurally and visually equal.
+ *
+ * EQUALITY INVARIANT:
+ * Two graphs g1 and g2 are equal if and only if:
+ * 1. Node count and edge count are identical.
+ * 2. Every node at index i (due to deterministic sorting) has identical id, type, label, count, and authorUrl.
+ * 3. Every edge at index i has identical id, source, target, and type.
+ *
+ * When areGraphsEqual returns true, the visual layout, node labels, connectivity, and neighbor details
+ * are completely identical, allowing layout.init() and position resets to be safely skipped.
+ *
+ * @param {{ nodes: Array<Object>, edges: Array<Object> } | null} g1
+ * @param {{ nodes: Array<Object>, edges: Array<Object> } | null} g2
+ * @returns {boolean}
+ */
+export function areGraphsEqual(g1, g2) {
+  if (!g1 || !g2) return false;
+  if (g1 === g2) return true;
+  if (!Array.isArray(g1.nodes) || !Array.isArray(g2.nodes)) return false;
+  if (!Array.isArray(g1.edges) || !Array.isArray(g2.edges)) return false;
+  if (g1.nodes.length !== g2.nodes.length || g1.edges.length !== g2.edges.length) return false;
+
+  for (let i = 0; i < g1.nodes.length; i++) {
+    const n1 = g1.nodes[i];
+    const n2 = g2.nodes[i];
+    if (n1.id !== n2.id || n1.type !== n2.type || n1.label !== n2.label) {
+      return false;
+    }
+    if (n1.count !== n2.count || n1.authorUrl !== n2.authorUrl) {
+      return false;
+    }
+  }
+
+  for (let i = 0; i < g1.edges.length; i++) {
+    const e1 = g1.edges[i];
+    const e2 = g2.edges[i];
+    if (e1.id !== e2.id || e1.source !== e2.source || e1.target !== e2.target || e1.type !== e2.type) {
+      return false;
+    }
+  }
+
+  return true;
+}
