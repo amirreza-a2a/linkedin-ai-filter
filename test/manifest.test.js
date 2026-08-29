@@ -11,8 +11,8 @@ test("manifest.json - Valid Manifest V3 with minimal required permissions", () =
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "FeedRule — Custom AI Filter for LinkedIn");
 
-  // Verify 'scripting' permission was removed
-  assert.deepEqual(manifest.permissions, ["storage"]);
+  // Verify minimal required permissions: storage and tabs
+  assert.deepEqual(manifest.permissions, ["storage", "tabs"]);
   assert.ok(!manifest.permissions.includes("scripting"));
 
   // Verify content_scripts matches both www and apex domain

@@ -180,24 +180,25 @@ export async function openExtensionPage(pageKeyOrPath) {
       let matchingTabs = [];
       try {
         matchingTabs = await chrome.tabs.query({ url: canonicalUrl });
-      } catch {
-        matchingTabs = [];
+      } catch (err) {
+        console.warn("[FeedRule][NAV] tabs.query by URL pattern failed:", err);
       }
 
-      // Fallback query to match tabs that might have query params or hash fragments
+      // Fallback query to match tabs that might have query params, hash fragments, or pendingUrl
       if (!matchingTabs || matchingTabs.length === 0) {
         try {
           const allTabs = await chrome.tabs.query({});
           matchingTabs = (allTabs || []).filter((tab) => {
-            if (!tab.url) return false;
-            return normalizeExtensionPathname(tab.url) === canonicalPathname;
+            const rawUrl = tab.url || tab.pendingUrl || "";
+            if (!rawUrl) return false;
+            return normalizeExtensionPathname(rawUrl) === canonicalPathname;
           });
-        } catch {
-          // ignore
+        } catch (err) {
+          console.warn("[FeedRule][NAV] allTabs query failed:", err);
         }
       }
 
-      console.log(`[FeedRule][NAV] query result: found ${matchingTabs ? matchingTabs.length : 0} matching tabs`);
+      console.log(`[FeedRule][NAV] existing tabs found:`, matchingTabs ? matchingTabs.length : 0);
 
       if (matchingTabs && matchingTabs.length > 0) {
         const existingTab = matchingTabs[0];
@@ -216,7 +217,7 @@ export async function openExtensionPage(pageKeyOrPath) {
         }
 
         try {
-          console.log(`[FeedRule][NAV] activating existing tab ${existingTab.id}`);
+          console.log(`[FeedRule][NAV] reusing tab ${existingTab.id}`);
           await chrome.tabs.update(existingTab.id, { active: true });
           if (existingTab.windowId && chrome.windows?.update) {
             try {
@@ -232,7 +233,7 @@ export async function openExtensionPage(pageKeyOrPath) {
       }
 
       // No existing tab -> create exactly one new tab
-      console.log(`[FeedRule][NAV] creating tab with URL: ${canonicalUrl}`);
+      console.log(`[FeedRule][NAV] creating tab: ${canonicalUrl}`);
       return await chrome.tabs.create({ url: canonicalUrl });
     } finally {
       inFlightNavigations.delete(canonicalPathname);

@@ -27,24 +27,38 @@ enabledEl.addEventListener("change", async () => {
   await setSettings({ enabled: enabledEl.checked });
 });
 
-document.getElementById("openGraph").addEventListener("click", (e) => {
+console.log("[FeedRule][NAV] listeners registering in popup.js");
+
+document.getElementById("openGraph").addEventListener("click", async (e) => {
   e.preventDefault();
-  openExtensionPage("graph");
+  e.stopPropagation();
+  console.log("[FeedRule][NAV] click intercepted on popup #openGraph");
+  await openExtensionPage("graph");
+  window.close();
 });
 
-document.getElementById("openSaved").addEventListener("click", (e) => {
+document.getElementById("openSaved").addEventListener("click", async (e) => {
   e.preventDefault();
-  openExtensionPage("saved");
+  e.stopPropagation();
+  console.log("[FeedRule][NAV] click intercepted on popup #openSaved");
+  await openExtensionPage("saved");
+  window.close();
 });
 
-document.getElementById("openDashboard").addEventListener("click", (e) => {
+document.getElementById("openDashboard").addEventListener("click", async (e) => {
   e.preventDefault();
-  openExtensionPage("dashboard");
+  e.stopPropagation();
+  console.log("[FeedRule][NAV] click intercepted on popup #openDashboard");
+  await openExtensionPage("dashboard");
+  window.close();
 });
 
-document.getElementById("openOptions").addEventListener("click", (e) => {
+document.getElementById("openOptions").addEventListener("click", async (e) => {
   e.preventDefault();
-  openExtensionPage("options");
+  e.stopPropagation();
+  console.log("[FeedRule][NAV] click intercepted on popup #openOptions");
+  await openExtensionPage("options");
+  window.close();
 });
 
 load();

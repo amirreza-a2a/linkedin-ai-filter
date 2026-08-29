@@ -156,9 +156,12 @@ exportJsonBtn.addEventListener("click", () => {
 });
 
 if (openGraphBtn) {
-  openGraphBtn.addEventListener("click", (e) => {
+  console.log("[FeedRule][NAV] listener registered for #openGraphBtn in saved.js");
+  openGraphBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    openExtensionPage("graph");
+    e.stopPropagation();
+    console.log("[FeedRule][NAV] click intercepted on #openGraphBtn in saved.js, preventDefault executed");
+    await openExtensionPage("graph");
   });
 }
 

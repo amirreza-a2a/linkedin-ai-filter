@@ -176,16 +176,22 @@ clearBtn.addEventListener("click", async () => {
 });
 
 if (openBrainBtn) {
-  openBrainBtn.addEventListener("click", (e) => {
+  console.log("[FeedRule][NAV] listener registered for #openBrainBtn");
+  openBrainBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    openExtensionPage("saved");
+    e.stopPropagation();
+    console.log("[FeedRule][NAV] click intercepted on #openBrainBtn, preventDefault executed");
+    await openExtensionPage("saved");
   });
 }
 
 if (openGraphBtn) {
-  openGraphBtn.addEventListener("click", (e) => {
+  console.log("[FeedRule][NAV] listener registered for #openGraphBtn");
+  openGraphBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    openExtensionPage("graph");
+    e.stopPropagation();
+    console.log("[FeedRule][NAV] click intercepted on #openGraphBtn, preventDefault executed");
+    await openExtensionPage("graph");
   });
 }
 

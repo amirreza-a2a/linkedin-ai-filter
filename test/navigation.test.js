@@ -338,3 +338,68 @@ test("Singleton Sequence: Dashboard -> Graph -> Saved -> Graph -> Saved leaves e
   assert.equal(tSaved2.id, tSaved.id);
   assert.equal(tSaved2.active, true);
 });
+
+// =========================================================================
+// 6. DOM & CODEBASE CONTRACT AUDIT
+// =========================================================================
+
+test("DOM Contract: Internal navigation controls in HTML files are button elements without native hrefs", () => {
+  const htmlFiles = [
+    path.resolve("src/dashboard/dashboard.html"),
+    path.resolve("src/graph/graph.html"),
+    path.resolve("src/saved/saved.html"),
+  ];
+
+  for (const file of htmlFiles) {
+    const content = fs.readFileSync(file, "utf-8");
+    // Ensure no <a ... href="/src/...html"> or <a ... href="src/...html"> exists for internal nav
+    assert.ok(
+      !/<a\s+[^>]*href=["'][^"']*\.html["'][^>]*id=["']open(Graph|Brain|Dashboard)Btn["']/i.test(content),
+      `File ${file} must NOT contain anchor tags with native href pointing to HTML pages for internal navigation`
+    );
+
+    // Verify button tags are used for the main nav IDs
+    const navBtnMatches = content.match(/<button\s+[^>]*id=["']open(Graph|Brain|Dashboard)Btn["']/gi) || [];
+    assert.ok(
+      navBtnMatches.length >= 1,
+      `File ${file} must contain <button> elements for internal navigation`
+    );
+  }
+});
+
+test("Codebase Contract: UI controllers do NOT call chrome.tabs.create directly for internal pages", () => {
+  const controllerFiles = [
+    path.resolve("src/dashboard/dashboard.js"),
+    path.resolve("src/graph/graph.js"),
+    path.resolve("src/saved/saved.js"),
+    path.resolve("src/popup/popup.js"),
+  ];
+
+  for (const file of controllerFiles) {
+    const content = fs.readFileSync(file, "utf-8");
+    // Verify no direct chrome.tabs.create({ url: ... .html }) calls exist
+    assert.ok(
+      !/chrome\.tabs\.create\s*\(\s*{\s*url:\s*chrome\.runtime\.getURL/i.test(content),
+      `File ${file} must use openExtensionPage() instead of direct chrome.tabs.create()`
+    );
+  }
+});
+
+test("Tab Reuse with pendingUrl: Reuses tab when tab is in pendingUrl state", async () => {
+  const loadingGraphTab = {
+    id: 88,
+    url: "",
+    pendingUrl: "chrome-extension://feedrule-extension-id/src/graph/graph.html",
+    active: false,
+    windowId: 1,
+  };
+  const { mock, calls } = createMockChrome([loadingGraphTab]);
+  globalThis.chrome = mock;
+
+  const result = await openExtensionPage("graph");
+
+  assert.equal(result.id, 88);
+  assert.equal(calls.create.length, 0);
+  assert.equal(calls.update.length, 1);
+  assert.equal(calls.update[0].tabId, 88);
+});

@@ -445,16 +445,22 @@ if (toggleSidebarBtn) {
 }
 
 if (openBrainBtn) {
-  openBrainBtn.addEventListener("click", (e) => {
+  console.log("[FeedRule][NAV] listener registered for #openBrainBtn in graph.js");
+  openBrainBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    openExtensionPage("saved");
+    e.stopPropagation();
+    console.log("[FeedRule][NAV] click intercepted on #openBrainBtn, preventDefault executed");
+    await openExtensionPage("saved");
   });
 }
 
 if (openDashboardBtn) {
-  openDashboardBtn.addEventListener("click", (e) => {
+  console.log("[FeedRule][NAV] listener registered for #openDashboardBtn in graph.js");
+  openDashboardBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    openExtensionPage("dashboard");
+    e.stopPropagation();
+    console.log("[FeedRule][NAV] click intercepted on #openDashboardBtn, preventDefault executed");
+    await openExtensionPage("dashboard");
   });
 }
 
