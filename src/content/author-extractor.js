@@ -37,6 +37,20 @@ const DISQUALIFIED_CONTAINER_SELECTORS = [
   ".artdeco-button",
 ];
 
+const COMBINED_PROFILE_LINK_SELECTOR = [
+  "a.update-components-actor__image[href]",
+  "a.feed-shared-actor__container-link[href]",
+  "a.update-components-actor__container-link[href]",
+  "a.app-aware-link[href*='/in/']",
+  "a.app-aware-link[href*='/company/']",
+  "a.app-aware-link[href*='/school/']",
+  "a.app-aware-link[href*='/showcase/']",
+  "a[href*='/in/']",
+  "a[href*='/company/']",
+  "a[href*='/school/']",
+  "a[href*='/showcase/']",
+].join(", ");
+
 /**
  * Verifies that a URL points to a legitimate LinkedIn actor identity destination.
  *
@@ -68,9 +82,9 @@ export function cleanAuthorName(rawName) {
   let name = lines.length > 0 ? lines[0] : rawName.trim();
 
   // 2. Remove accessibility prefixes if inline: "View Alice's profile" -> "Alice"
-  name = name.replace(/^View\s+(.+?)['’]s\s+(profile|page|company\s+page).*$/i, "$1");
+  name = name.replace(/^View\s+(.+?)['’]s\s+(?:profile|page|company\s+page)$/i, "$1");
 
-  // 3. Remove connection badges and indicators (• 1st, • 2nd, • 3rd+, • Following, • You)
+  // 3. Remove connection degree badges ("• 1st", "• 2nd", "• 3rd+", "Following", "You", "Premium")
   name = name.replace(/\s*[•·]\s*(1st|2nd|3rd\+?|Following|You|Premium)\b.*/i, "");
 
   // 4. Remove social context phrases (reposted this, liked this, Promoted, Suggested)
@@ -85,7 +99,7 @@ export function cleanAuthorName(rawName) {
 }
 
 /**
- * Checks if an element is part of a secondary or social-context region (liker, resharer header, comments, etc.).
+ * Checks whether an element is inside an excluded social-context or comments region.
  *
  * @param {Element} el
  * @returns {boolean}
@@ -93,7 +107,7 @@ export function cleanAuthorName(rawName) {
 function isDisqualifiedElement(el) {
   if (!el) return true;
 
-  // 1. Check parent hierarchy for disqualified container classes
+  // 1. Explicit disqualification selectors (headers, likers, comments, social actions)
   for (const sel of DISQUALIFIED_CONTAINER_SELECTORS) {
     if (el.closest?.(sel)) return true;
   }
@@ -186,13 +200,19 @@ export function extractExplicitAuthorMetadata(root) {
 }
 
 /**
- * Extracts coupled author name and canonical author profile URL from a post DOM container
- * using a ranked candidate-selection pipeline.
+ * Extracts author identity from a post container using a ranked candidate-selection pipeline.
  *
- * INVARIANT: Both `author` and `authorUrl` strictly originate from the winning identity candidate subtree.
+ * RANKING PRIORITY:
+ * 1. Explicit post-author accessibility labels (e.g. "Open control menu for post by <Author>")
+ * 2. Anchors inside primary post-header actor containers (.update-components-actor, .feed-shared-actor)
+ * 3. Anchors with specific actor markup classes
+ * 4. General identity links (/in/, /company/, /school/, /showcase/)
  *
- * @param {Element|Object} el - Post container element
- * @param {Function} [sanitizeUrlFn=sanitizeUrl] - Canonical URL sanitization function
+ * STRICT INVARIANT:
+ * `author` and `authorUrl` MUST originate from the same winning identity candidate / subtree.
+ *
+ * @param {Element} el Post container element
+ * @param {Function} [sanitizeUrlFn=sanitizeUrl] Canonical URL sanitizer
  * @returns {{ author: string, authorUrl: string }}
  */
 export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
@@ -203,84 +223,68 @@ export function extractAuthor(el, sanitizeUrlFn = sanitizeUrl) {
   // 1. Extract explicit metadata signal if present (e.g. control menu / post label)
   const explicitAuthorName = extractExplicitAuthorMetadata(el);
 
-  // 2. Locate and rank all candidate profile anchors in the post
-  const PROFILE_LINK_SELECTORS = [
-    "a.update-components-actor__image[href]",
-    "a.feed-shared-actor__container-link[href]",
-    "a.update-components-actor__container-link[href]",
-    "a.app-aware-link[href*='/in/']",
-    "a.app-aware-link[href*='/company/']",
-    "a.app-aware-link[href*='/school/']",
-    "a.app-aware-link[href*='/showcase/']",
-    "a[href*='/in/']",
-    "a[href*='/company/']",
-    "a[href*='/school/']",
-    "a[href*='/showcase/']",
-  ];
-
+  // 2. Locate and rank all candidate profile anchors in the post in a single query pass
   const candidateAnchors = [];
   const seenUrls = new Set();
 
-  for (const sel of PROFILE_LINK_SELECTORS) {
-    const matches = Array.from(el.querySelectorAll(sel));
-    for (const a of matches) {
-      const rawHref = a.getAttribute("href") || a.href || "";
-      if (!isValidAuthorUrl(rawHref)) continue;
+  const matches = Array.from(el.querySelectorAll(COMBINED_PROFILE_LINK_SELECTOR));
+  for (const a of matches) {
+    const rawHref = a.getAttribute("href") || a.href || "";
+    if (!isValidAuthorUrl(rawHref)) continue;
 
-      const sanitizedHref = sanitizeUrlFn(rawHref);
-      if (!isValidAuthorUrl(sanitizedHref)) continue;
+    const sanitizedHref = sanitizeUrlFn(rawHref);
+    if (!isValidAuthorUrl(sanitizedHref)) continue;
 
-      if (seenUrls.has(sanitizedHref)) continue;
-      seenUrls.add(sanitizedHref);
+    if (seenUrls.has(sanitizedHref)) continue;
+    seenUrls.add(sanitizedHref);
 
-      // Check disqualification (social headers, comments, etc.)
-      if (isDisqualifiedElement(a)) continue;
+    // Check disqualification (social headers, comments, etc.)
+    if (isDisqualifiedElement(a)) continue;
 
-      // Score this candidate
-      let score = 10; // Base score for valid profile link outside disqualified containers
+    // Score this candidate
+    let score = 10; // Base score for valid profile link outside disqualified containers
 
-      const inActorContainer = Boolean(
-        a.closest?.(".update-components-actor") ||
-        a.closest?.(".feed-shared-actor") ||
-        a.closest?.("[data-testid='actor-container']")
-      );
-      if (inActorContainer) score += 100;
+    const inActorContainer = Boolean(
+      a.closest?.(".update-components-actor") ||
+      a.closest?.(".feed-shared-actor") ||
+      a.closest?.("[data-testid='actor-container']")
+    );
+    if (inActorContainer) score += 100;
 
-      const inActorMeta = Boolean(
-        a.closest?.(".update-components-actor__meta") ||
-        a.closest?.(".update-components-actor__title") ||
-        a.closest?.(".feed-shared-actor__title") ||
-        a.closest?.(".update-components-actor__container")
-      );
-      if (inActorMeta) score += 50;
+    const inActorMeta = Boolean(
+      a.closest?.(".update-components-actor__meta") ||
+      a.closest?.(".update-components-actor__title") ||
+      a.closest?.(".feed-shared-actor__title") ||
+      a.closest?.(".update-components-actor__container")
+    );
+    if (inActorMeta) score += 50;
 
-      if (
-        a.classList?.contains?.("update-components-actor__image") ||
-        a.classList?.contains?.("feed-shared-actor__container-link") ||
-        a.classList?.contains?.("update-components-actor__container-link")
-      ) {
-        score += 40;
-      }
-
-      // Check for explicit name match
-      const ariaLabel = a.getAttribute("aria-label") || "";
-      const text = a.textContent || "";
-      const cleanAria = cleanAuthorName(ariaLabel);
-      const cleanText = cleanAuthorName(text);
-
-      if (explicitAuthorName && doesCandidateMatchExplicitName(a, sanitizedHref, explicitAuthorName)) {
-        score += 200;
-      }
-
-      if (cleanAria || cleanText) score += 20;
-
-      candidateAnchors.push({
-        anchor: a,
-        authorUrl: sanitizedHref,
-        score,
-        inActorContainer,
-      });
+    if (
+      a.classList?.contains?.("update-components-actor__image") ||
+      a.classList?.contains?.("feed-shared-actor__container-link") ||
+      a.classList?.contains?.("update-components-actor__container-link")
+    ) {
+      score += 40;
     }
+
+    // Check for explicit name match
+    const ariaLabel = a.getAttribute("aria-label") || "";
+    const text = a.textContent || "";
+    const cleanAria = cleanAuthorName(ariaLabel);
+    const cleanText = cleanAuthorName(text);
+
+    if (explicitAuthorName && doesCandidateMatchExplicitName(a, sanitizedHref, explicitAuthorName)) {
+      score += 200;
+    }
+
+    if (cleanAria || cleanText) score += 20;
+
+    candidateAnchors.push({
+      anchor: a,
+      authorUrl: sanitizedHref,
+      score,
+      inActorContainer,
+    });
   }
 
   // Sort candidates by score descending

@@ -12,7 +12,7 @@ const HIDDEN_CLASS = "feedrule-hidden";
 export const isDebugEnabled = () =>
   typeof window !== "undefined" && Boolean(window.__FEEDRULE_DEBUG__);
 
-const CONTAINER_CANDIDATES = [
+const COMBINED_CONTAINER_SELECTOR = [
   "div.feed-shared-update-v2",
   "div[data-urn*='activity:']",
   "div[data-urn*='ugcPost:']",
@@ -20,7 +20,7 @@ const CONTAINER_CANDIDATES = [
   "div[data-id*='activity:']",
   'div[data-testid="mainFeed"] div[role="listitem"]',
   'div[role="listitem"]',
-];
+].join(", ");
 
 const TEXT_CANDIDATES = [
   '[data-testid="expandable-text-box"]',
@@ -118,6 +118,7 @@ export function extractPost(el) {
 
 /**
  * Finds candidate container elements with deduplication favoring canonical inner update nodes.
+ * Executes in a single consolidated query pass for high throughput.
  *
  * @param {Element|Object} root
  * @returns {Array<Element|Object>}
@@ -126,22 +127,19 @@ export function findContainers(root) {
   if (!root || typeof root.querySelectorAll !== "function") return [];
 
   const rawCandidates = [];
-  for (const sel of CONTAINER_CANDIDATES) {
-    if (root.matches?.(sel)) {
-      rawCandidates.push({ node: root, selector: sel });
-    }
-    const found = root.querySelectorAll(sel) || [];
-    for (const node of found) {
-      rawCandidates.push({ node, selector: sel });
-    }
+  if (root.matches?.(COMBINED_CONTAINER_SELECTOR)) {
+    rawCandidates.push(root);
+  }
+  const found = root.querySelectorAll(COMBINED_CONTAINER_SELECTOR) || [];
+  for (const node of found) {
+    rawCandidates.push(node);
   }
 
   // Deduplicate and filter out redundant outer wrappers when an inner canonical update exists
   const uniqueNodes = new Set();
   const canonicalNodes = [];
 
-  for (const item of rawCandidates) {
-    const node = item.node;
+  for (const node of rawCandidates) {
     if (uniqueNodes.has(node)) continue;
     uniqueNodes.add(node);
 
@@ -322,6 +320,41 @@ export function scan(root) {
   }
 }
 
+// --- Coalesced MutationObserver Processing ---------------------------
+let mutationTimer = null;
+const mutationQueue = new Set();
+const MUTATION_BUFFER_MS = 50;
+
+export function processMutationQueue() {
+  if (mutationQueue.size === 0) return;
+
+  const rootsToScan = [];
+  for (const node of mutationQueue) {
+    let isChild = false;
+    let parent = node.parentElement;
+    while (parent) {
+      if (mutationQueue.has(parent)) {
+        isChild = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    if (!isChild) {
+      rootsToScan.push(node);
+    }
+  }
+  mutationQueue.clear();
+
+  for (const root of rootsToScan) {
+    scan(root);
+  }
+
+  if (pending.length > 0) {
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(flush, DEBOUNCE_MS);
+  }
+}
+
 if (typeof document !== "undefined") {
   console.log("[FeedRule] running initial scan...");
   scan(document.body);
@@ -334,16 +367,16 @@ if (typeof document !== "undefined") {
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        mutationQueue.add(node);
         sawAdditions = true;
-        scan(node);
       }
     }
     if (sawAdditions) {
-      clearTimeout(flushTimer);
-      flushTimer = setTimeout(flush, DEBOUNCE_MS);
+      clearTimeout(mutationTimer);
+      mutationTimer = setTimeout(processMutationQueue, MUTATION_BUFFER_MS);
     }
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
-  console.log("[FeedRule] MutationObserver attached, watching for new posts");
+  console.log("[FeedRule] MutationObserver attached, watching for new posts with coalesced buffer");
 }

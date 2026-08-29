@@ -1,5 +1,6 @@
 // src/graph/graph.js
-import { getSavedPosts } from "../storage/saved-posts-store.js";
+// Knowledge Graph Visualizer controller for FeedRule Second Brain.
+
 import {
   buildKnowledgeGraph,
   filterGraphByNodeType,
@@ -7,193 +8,199 @@ import {
 } from "./graph-builder.js";
 import { ForceLayout, PHYSICS_PRESETS } from "./force-layout.js";
 import { GraphRenderer } from "./graph-renderer.js";
+import { getSavedPosts } from "../storage/saved-posts-store.js";
 import { escapeXml } from "../dashboard/charts.js";
 
-const canvas = document.getElementById("graphCanvas");
-const sidebar = document.getElementById("sidebar");
-const searchInput = document.getElementById("searchGraph");
-const topicFilterSelect = document.getElementById("topicFilterSelect");
-const authorFilterSelect = document.getElementById("authorFilterSelect");
-const nodeTypeSelect = document.getElementById("nodeTypeSelect");
-const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+// DOM Elements
+const canvas = document.getElementById("graph-canvas");
+const topicFilterSelect = document.getElementById("topic-filter");
+const authorFilterSelect = document.getElementById("author-filter");
+const nodeTypeSelect = document.getElementById("node-type-filter");
+const searchInput = document.getElementById("search-input");
+const clearFiltersBtn = document.getElementById("clear-filters-btn");
+const fitGraphBtn = document.getElementById("fit-graph-btn");
+const resetViewBtn = document.getElementById("reset-view-btn");
+const focusBanner = document.getElementById("focus-banner");
+const focusLabel = document.getElementById("focus-label");
+const exitFocusBtn = document.getElementById("exit-focus-btn");
+const emptyState = document.getElementById("graph-empty-state");
+const emptyStateDesc = document.getElementById("empty-state-desc");
 
-const focusBanner = document.getElementById("focusBanner");
-const focusLabel = document.getElementById("focusLabel");
-const exitFocusBtn = document.getElementById("exitFocusBtn");
+// Sidebar & Detail Card
+const sidebar = document.getElementById("graph-sidebar");
+const toggleSidebarBtn = document.getElementById("toggle-sidebar-btn");
+const nodeDetailsContent = document.getElementById("node-details-content");
 
-const fitGraphBtn = document.getElementById("fitGraphBtn");
-const resetViewBtn = document.getElementById("resetViewBtn");
-const togglePhysicsBtn = document.getElementById("togglePhysicsBtn");
-const physicsPanel = document.getElementById("physicsPanel");
-const densitySlider = document.getElementById("densitySlider");
-const spacingSlider = document.getElementById("spacingSlider");
-const gravitySlider = document.getElementById("gravitySlider");
-const resetPhysicsBtn = document.getElementById("resetPhysicsBtn");
+// Physics Controls Elements
+const togglePhysicsBtn = document.getElementById("toggle-physics-btn");
+const physicsPanel = document.getElementById("physics-panel");
+const densitySlider = document.getElementById("density-slider");
+const spacingSlider = document.getElementById("spacing-slider");
+const gravitySlider = document.getElementById("gravity-slider");
+const resetPhysicsBtn = document.getElementById("reset-physics-btn");
 
-const emptyState = document.getElementById("emptyState");
-const emptyStateDesc = document.getElementById("emptyStateDesc");
-const openBrainBtn = document.getElementById("openBrainBtn");
-const openDashboardBtn = document.getElementById("openDashboardBtn");
-const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+// Navigation Links
+const openBrainBtn = document.getElementById("open-brain-btn");
+const openDashboardBtn = document.getElementById("open-dashboard-btn");
 
+// Application State
+let allSavedPosts = [];
+let activeGraph = { nodes: [], edges: [] };
+let focusedNodeId = null;
 let layout = null;
 let renderer = null;
-let activeGraph = { nodes: [], edges: [] };
-let allSavedPosts = [];
-let focusedNodeId = null;
+let searchDebounceTimer = null;
 
 function renderNodeDetails(node) {
   if (!node) {
-    sidebar.innerHTML = `
-      <div class="empty-prompt">
-        <p>💡 Click any node on the graph to inspect its relationships and details.</p>
+    nodeDetailsContent.innerHTML = `
+      <div class="empty-selection">
+        <p>Click on any post, topic, or author node in the graph to inspect its connections.</p>
       </div>
     `;
     return;
   }
 
-  // Open sidebar on mobile if collapsed
-  sidebar.classList.add("open");
+  const { id, type, label, data } = node;
 
-  if (node.type === "post") {
-    const p = node.data || {};
-    const dateStr = p.savedAt ? new Date(p.savedAt).toLocaleString() : "Unknown";
-    const authorDisplayName = p.author
-      ? escapeXml(p.author)
-      : `<span style="color:#94a3b8; font-style:italic;">Author unavailable</span>`;
-
-    const authorLink = p.authorUrl
-      ? `<a class="link" href="${escapeXml(p.authorUrl)}" target="_blank" rel="noopener">${authorDisplayName}</a>`
-      : authorDisplayName;
-
-    const postLink = p.postUrl
-      ? `<p><a class="link" href="${escapeXml(p.postUrl)}" target="_blank" rel="noopener">Open Original on LinkedIn ↗</a></p>`
-      : `<p class="unavailable-link">Original link unavailable</p>`;
-
-    const topicBadges = (p.topics || [])
-      .map((t) => `<span class="badge badge-topic">#${escapeXml(t)}</span>`)
-      .join("");
-
-    sidebar.innerHTML = `
-      <div class="sidebar-header">
-        <span class="badge badge-post" style="background:#e8f3ff; color:#0a66c2; border:1px solid #b3d7ff;">Saved Post</span>
-        <button class="btn btn-secondary btn-sm" id="focusNodeBtn">🎯 Focus</button>
-      </div>
-      <div class="detail-card">
-        <p><strong>Author:</strong> ${authorLink}</p>
-        <p><strong>Saved:</strong> ${escapeXml(dateStr)}</p>
-        <p><strong>Reason:</strong> ${escapeXml(p.saveReason || "Manual save")}</p>
-        <p style="margin-top:6px;"><strong>Topics:</strong><br>${topicBadges || "—"}</p>
-        <div style="margin-top:8px;">${postLink}</div>
-      </div>
-      <div class="detail-card">
-        <strong>Content:</strong>
-        <div class="detail-text">${escapeXml(p.text || "")}</div>
-      </div>
-    `;
-  } else if (node.type === "topic") {
-    // Find all posts connected to this topic in the active graph
-    const connectedPostIds = new Set(
-      activeGraph.edges
-        .filter((e) => e.target === node.id && e.type === "has-topic")
-        .map((e) => e.source)
-    );
-
-    const matchingPosts = allSavedPosts.filter((p) => connectedPostIds.has(`post:${p.id}`));
-
-    const postsHtml = matchingPosts
-      .map((p) => {
-        const textExcerpt = (p.text || "").slice(0, 100);
-        return `
-          <div class="connected-item" data-post-id="${escapeXml(p.id)}">
-            <div style="font-weight:600; color:#334155; margin-bottom:2px;">${escapeXml(p.author || "Author unavailable")}</div>
-            <div style="color:#64748b;">${escapeXml(textExcerpt)}${textExcerpt.length >= 100 ? "…" : ""}</div>
-          </div>
-        `;
-      })
-      .join("");
-
-    sidebar.innerHTML = `
-      <div class="sidebar-header">
-        <div>
-          <span class="badge badge-topic">#${escapeXml(node.label)}</span>
-          <span style="font-size:12px; color:#64748b; font-weight:normal;">(${matchingPosts.length} posts)</span>
-        </div>
-        <button class="btn btn-secondary btn-sm" id="focusNodeBtn">🎯 Focus</button>
-      </div>
-      <p style="font-size:12px; color:#475569; margin-bottom:8px;">Saved posts tagged with this topic:</p>
-      <div class="connected-list">${postsHtml || "<p style='color:#94a3b8; font-size:12px;'>No posts connected.</p>"}</div>
-    `;
-
-    sidebar.querySelectorAll(".connected-item").forEach((el) => {
-      el.addEventListener("click", () => {
-        const pId = el.getAttribute("data-post-id");
-        const targetNode = layout.nodeMap.get(`post:${pId}`);
-        if (targetNode) {
-          renderer.selectedNode = targetNode;
-          renderNodeDetails(targetNode);
-          renderer.requestRender();
-        }
-      });
-    });
-  } else if (node.type === "author") {
-    // Find all posts written by this author in the active graph
-    const connectedPostIds = new Set(
-      activeGraph.edges
-        .filter((e) => e.target === node.id && e.type === "written-by")
-        .map((e) => e.source)
-    );
-
-    const matchingPosts = allSavedPosts.filter((p) => connectedPostIds.has(`post:${p.id}`));
-
-    const profileLink = node.authorUrl
-      ? `<a class="link" href="${escapeXml(node.authorUrl)}" target="_blank" rel="noopener" style="font-size:12px;">View LinkedIn Profile ↗</a>`
-      : "";
-
-    const postsHtml = matchingPosts
-      .map((p) => {
-        const textExcerpt = (p.text || "").slice(0, 100);
-        return `
-          <div class="connected-item" data-post-id="${escapeXml(p.id)}">
-            <div style="color:#64748b;">${escapeXml(textExcerpt)}${textExcerpt.length >= 100 ? "…" : ""}</div>
-          </div>
-        `;
-      })
-      .join("");
-
-    sidebar.innerHTML = `
-      <div class="sidebar-header">
-        <div>
-          <span class="badge badge-author">👤 ${escapeXml(node.label)}</span>
-          <span style="font-size:12px; color:#64748b; font-weight:normal;">(${matchingPosts.length} posts)</span>
-        </div>
-        <button class="btn btn-secondary btn-sm" id="focusNodeBtn">🎯 Focus</button>
-      </div>
-      <div style="margin-bottom:10px;">${profileLink}</div>
-      <p style="font-size:12px; color:#475569; margin-bottom:8px;">Saved posts written by this author:</p>
-      <div class="connected-list">${postsHtml || "<p style='color:#94a3b8; font-size:12px;'>No posts connected.</p>"}</div>
-    `;
-
-    sidebar.querySelectorAll(".connected-item").forEach((el) => {
-      el.addEventListener("click", () => {
-        const pId = el.getAttribute("data-post-id");
-        const targetNode = layout.nodeMap.get(`post:${pId}`);
-        if (targetNode) {
-          renderer.selectedNode = targetNode;
-          renderNodeDetails(targetNode);
-          renderer.requestRender();
-        }
-      });
-    });
+  let badgeClass = "badge-post";
+  let typeLabel = "Post";
+  if (type === "topic") {
+    badgeClass = "badge-topic";
+    typeLabel = "Topic";
+  } else if (type === "author") {
+    badgeClass = "badge-author";
+    typeLabel = "Author";
   }
 
-  // Wire Focus Button
-  const focusBtn = sidebar.querySelector("#focusNodeBtn");
+  // Find connected edges and neighbors
+  const connectedEdges = activeGraph.edges.filter(
+    (e) => e.source === id || e.target === id
+  );
+  const neighborNodeIds = new Set(
+    connectedEdges.map((e) => (e.source === id ? e.target : e.source))
+  );
+  const neighborNodes = activeGraph.nodes.filter((n) => neighborNodeIds.has(n.id));
+
+  let html = `
+    <div class="detail-header">
+      <span class="detail-badge ${badgeClass}">${typeLabel}</span>
+      <h3 class="detail-title">${escapeXml(label)}</h3>
+    </div>
+  `;
+
+  // Focus Neighborhood Button
+  html += `
+    <button class="action-btn focus-btn" id="focus-this-node-btn">
+      🎯 Focus Neighborhood
+    </button>
+  `;
+
+  if (type === "post") {
+    html += `
+      <div class="detail-section">
+        <h4>Author</h4>
+        <p>${escapeXml(data.author || "Unknown Author")}</p>
+        ${
+          data.authorUrl
+            ? `<a href="${escapeXml(data.authorUrl)}" target="_blank" rel="noopener noreferrer" class="detail-link">View LinkedIn Profile ↗</a>`
+            : ""
+        }
+      </div>
+      <div class="detail-section">
+        <h4>Topics</h4>
+        <div class="detail-tags">
+          ${(data.topics || [])
+            .map((t) => `<span class="detail-tag">${escapeXml(t)}</span>`)
+            .join("")}
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Post Excerpt</h4>
+        <p class="detail-text">${escapeXml(data.text || "")}</p>
+      </div>
+      ${
+        data.postUrl
+          ? `
+        <div class="detail-section">
+          <a href="${escapeXml(data.postUrl)}" target="_blank" rel="noopener noreferrer" class="detail-link permalink">
+            Open Original Post on LinkedIn ↗
+          </a>
+        </div>
+      `
+          : ""
+      }
+    `;
+  } else if (type === "topic") {
+    html += `
+      <div class="detail-section">
+        <h4>Connected Posts (${neighborNodes.length})</h4>
+        <ul class="neighbor-list">
+          ${neighborNodes
+            .map(
+              (n) => `
+            <li>
+              <button class="neighbor-link" data-node-id="${escapeXml(n.id)}">
+                ${escapeXml(n.label)}
+              </button>
+            </li>
+          `
+            )
+            .join("")}
+        </ul>
+      </div>
+    `;
+  } else if (type === "author") {
+    html += `
+      <div class="detail-section">
+        ${
+          data.authorUrl
+            ? `<a href="${escapeXml(data.authorUrl)}" target="_blank" rel="noopener noreferrer" class="detail-link">View LinkedIn Profile ↗</a>`
+            : ""
+        }
+      </div>
+      <div class="detail-section">
+        <h4>Authored Posts (${neighborNodes.length})</h4>
+        <ul class="neighbor-list">
+          ${neighborNodes
+            .map(
+              (n) => `
+            <li>
+              <button class="neighbor-link" data-node-id="${escapeXml(n.id)}">
+                ${escapeXml(n.label)}
+              </button>
+            </li>
+          `
+            )
+            .join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  nodeDetailsContent.innerHTML = html;
+
+  // Bind focus button
+  const focusBtn = document.getElementById("focus-this-node-btn");
   if (focusBtn) {
-    focusBtn.addEventListener("click", () => {
-      setFocusNode(node.id, node.label);
-    });
+    focusBtn.addEventListener("click", () => setFocusNode(id, label));
   }
+
+  // Bind neighbor navigation buttons
+  nodeDetailsContent.querySelectorAll(".neighbor-link").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-node-id");
+      const targetNode = activeGraph.nodes.find((n) => n.id === targetId);
+      if (targetNode) {
+        if (renderer) renderer.selectedNode = targetNode;
+        renderNodeDetails(targetNode);
+        if (renderer) renderer.requestRender();
+      }
+    });
+  });
+
+  // Open sidebar if closed on mobile/desktop
+  sidebar.classList.add("open");
 }
 
 function updateFilterDropdowns(posts) {
@@ -228,6 +235,18 @@ function updateFilterDropdowns(posts) {
           `<option value="${escapeXml(a)}" ${a.toLowerCase() === currentAuthor.toLowerCase() ? "selected" : ""}>${escapeXml(a)}</option>`
       )
       .join("");
+}
+
+function areGraphsEqual(g1, g2) {
+  if (!g1 || !g2) return false;
+  if (g1.nodes.length !== g2.nodes.length || g1.edges.length !== g2.edges.length) return false;
+  for (let i = 0; i < g1.nodes.length; i++) {
+    if (g1.nodes[i].id !== g2.nodes[i].id) return false;
+  }
+  for (let i = 0; i < g1.edges.length; i++) {
+    if (g1.edges[i].id !== g2.edges[i].id) return false;
+  }
+  return true;
 }
 
 function updateGraph() {
@@ -268,6 +287,8 @@ function updateGraph() {
     graph = extractNeighborhood(graph, focusedNodeId);
   }
 
+  // Check if graph structure is unchanged
+  const isUnchanged = areGraphsEqual(activeGraph, graph);
   activeGraph = graph;
 
   if (activeGraph.nodes.length === 0) {
@@ -277,6 +298,11 @@ function updateGraph() {
       : "Posts saved in your Second Brain will automatically form your Knowledge Graph.";
   } else {
     emptyState.style.display = "none";
+  }
+
+  if (isUnchanged) {
+    if (renderer) renderer.requestRender();
+    return;
   }
 
   const rect = canvas.parentElement.getBoundingClientRect();
@@ -348,7 +374,8 @@ nodeTypeSelect.addEventListener("change", () => {
 });
 
 searchInput.addEventListener("input", () => {
-  updateGraph();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(updateGraph, 150);
 });
 
 clearFiltersBtn.addEventListener("click", clearFilters);

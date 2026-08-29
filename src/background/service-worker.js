@@ -200,38 +200,53 @@ async function handleClassify(posts) {
         };
       });
     } else {
+      // Deduplicate uncached posts by hash within the batch to avoid duplicate LLM calls
+      const uniqueUncached = [];
+      const hashToIndices = new Map();
+      for (const item of uncached) {
+        if (!hashToIndices.has(item.hash)) {
+          hashToIndices.set(item.hash, [item.index]);
+          uniqueUncached.push(item);
+        } else {
+          hashToIndices.get(item.hash).push(item.index);
+        }
+      }
+
       const classifyFn = getProviderFn(provider);
       const apiResults = await classifyFn({
         apiKey,
         model,
         baseUrl,
         rulesText,
-        posts: uncached.map((u) => u.post),
+        posts: uniqueUncached.map((u) => u.post),
       });
 
       const safeResults = Array.isArray(apiResults) ? apiResults : [];
       const byId = new Map(safeResults.map((r) => [String(r.id), r]));
       const toCache = {};
 
-      for (const { index, post, hash } of uncached) {
+      for (const { post, hash } of uniqueUncached) {
         const r = byId.get(String(post.id)) || { hide: false, reason: "missing", topics: [] };
         const topics = Array.isArray(r.topics) ? r.topics : [];
         const saveEval = evaluateSaveRules(topics, saveRulesText);
 
-        const decision = {
-          id: post.id,
+        const targetIndices = hashToIndices.get(hash) || [];
+        for (const idx of targetIndices) {
+          results[idx] = {
+            id: posts[idx].id,
+            hide: r.hide === true,
+            reason: typeof r.reason === "string" ? r.reason : "",
+            topics,
+            saved: saveEval.shouldSave,
+            saveReason: saveEval.saveReason,
+            autoSaved: saveEval.shouldSave,
+          };
+        }
+
+        toCache[hash] = {
           hide: r.hide === true,
           reason: typeof r.reason === "string" ? r.reason : "",
           topics,
-          saved: saveEval.shouldSave,
-          saveReason: saveEval.saveReason,
-          autoSaved: saveEval.shouldSave,
-        };
-        results[index] = decision;
-        toCache[hash] = {
-          hide: decision.hide,
-          reason: decision.reason,
-          topics: decision.topics,
         };
       }
 
