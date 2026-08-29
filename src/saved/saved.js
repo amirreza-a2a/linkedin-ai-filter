@@ -2,52 +2,151 @@
 import { getSavedPosts, unsavePost } from "../storage/saved-posts-store.js";
 import { exportToMarkdown, exportToJson } from "../export/export-helper.js";
 import { openExtensionPage } from "../navigation/navigation.js";
+import { logger } from "../utils/logger.js";
 
-const searchInput = document.getElementById("searchInput");
-const topicSelect = document.getElementById("topicSelect");
-const statsBar = document.getElementById("statsBar");
-const postsList = document.getElementById("postsList");
-const exportMdBtn = document.getElementById("exportMdBtn");
-const exportJsonBtn = document.getElementById("exportJsonBtn");
-const openGraphBtn = document.getElementById("openGraphBtn");
+export const PAGE_STATE = {
+  LOADING: "loading",
+  READY: "ready",
+  EMPTY: "empty",
+  ERROR: "error",
+};
+
+const searchInput = typeof document !== "undefined" ? document.getElementById("searchInput") : null;
+const topicSelect = typeof document !== "undefined" ? document.getElementById("topicSelect") : null;
+const statsBar = typeof document !== "undefined" ? document.getElementById("statsBar") : null;
+const postsList = typeof document !== "undefined" ? document.getElementById("postsList") : null;
+const exportMdBtn = typeof document !== "undefined" ? document.getElementById("exportMdBtn") : null;
+const exportJsonBtn = typeof document !== "undefined" ? document.getElementById("exportJsonBtn") : null;
+const openGraphBtn = typeof document !== "undefined" ? document.getElementById("openGraphBtn") : null;
 
 let allPosts = [];
+let currentPageState = PAGE_STATE.LOADING;
+const inFlightUnsaves = new Set();
 
-function escapeHtml(str) {
+export function escapeHtml(str) {
   if (!str) return "";
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
 }
 
-function renderStats(posts, totalCount) {
-  const uniqueTopics = new Set();
-  for (const p of posts) {
-    for (const t of p.topics || []) uniqueTopics.add(t);
+export function setPageState(state, errorMessage = "") {
+  currentPageState = state;
+  if (!statsBar) return;
+
+  if (state === PAGE_STATE.LOADING) {
+    statsBar.textContent = "Loading saved posts...";
+  } else if (state === PAGE_STATE.ERROR) {
+    statsBar.textContent = errorMessage || "Error loading saved posts from storage.";
+    if (postsList) {
+      postsList.innerHTML = `
+        <div class="empty-state">
+          <h3 style="color:#d11;">Failed to load saved posts</h3>
+          <p>${escapeHtml(errorMessage || "An unexpected error occurred while retrieving saved posts. Please try reloading.")}</p>
+        </div>
+      `;
+    }
   }
-  statsBar.textContent = `${posts.length} ${posts.length === 1 ? "post" : "posts"} displayed (${uniqueTopics.size} unique topics) • Total saved: ${totalCount}`;
 }
 
-function updateTopicDropdown(posts) {
-  const currentVal = topicSelect.value;
+export function renderStats(filteredPosts, totalCount) {
+  if (!statsBar) return;
+  const uniqueTopics = new Set();
+  for (const p of filteredPosts) {
+    for (const t of p.topics || []) {
+      if (typeof t === "string" && t.trim()) uniqueTopics.add(t.trim());
+    }
+  }
+
+  if (totalCount === 0) {
+    statsBar.textContent = "0 posts saved";
+  } else if (filteredPosts.length === totalCount) {
+    statsBar.textContent = `${totalCount} ${totalCount === 1 ? "post" : "posts"} saved (${uniqueTopics.size} unique topics)`;
+  } else {
+    statsBar.textContent = `${filteredPosts.length} of ${totalCount} ${totalCount === 1 ? "post" : "posts"} displayed (${uniqueTopics.size} unique topics)`;
+  }
+}
+
+export function updateTopicDropdown(posts) {
+  if (!topicSelect) return;
+  const currentVal = topicSelect.value ? topicSelect.value.trim().toLowerCase() : "";
   const topicsSet = new Set();
   for (const p of posts) {
-    for (const t of p.topics || []) uniqueTopics.add(t);
+    for (const t of p.topics || []) {
+      if (typeof t === "string" && t.trim()) {
+        topicsSet.add(t.trim());
+      }
+    }
   }
 
   const sortedTopics = Array.from(topicsSet).sort((a, b) => a.localeCompare(b));
-  topicSelect.innerHTML = `<option value="">All Topics (${sortedTopics.length})</option>` +
-    sortedTopics.map((t) => `<option value="${escapeHtml(t)}" ${t === currentVal ? "selected" : ""}>${escapeHtml(t)}</option>`).join("");
+  const isCurrentStillValid = currentVal && sortedTopics.some((t) => t.toLowerCase() === currentVal);
+  const selectedTopic = isCurrentStillValid ? currentVal : "";
+
+  topicSelect.innerHTML =
+    `<option value="">All Topics (${sortedTopics.length})</option>` +
+    sortedTopics
+      .map((t) => {
+        const isSelected = t.toLowerCase() === selectedTopic;
+        return `<option value="${escapeHtml(t)}" ${isSelected ? "selected" : ""}>${escapeHtml(t)}</option>`;
+      })
+      .join("");
 }
 
-function renderPosts(posts) {
+export async function handleUnsave(postId, btnElement) {
+  if (!postId || inFlightUnsaves.has(postId)) return;
+
+  inFlightUnsaves.add(postId);
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.textContent = "Unsaving...";
+  }
+
+  try {
+    const success = await unsavePost(postId);
+    if (!success) {
+      logger.warn("SAVED", `Post ${postId} was not found in storage during unsave.`);
+    }
+
+    // Immediate local state update for snappy UI response
+    allPosts = allPosts.filter((p) => p.id !== postId);
+
+    // Update topic dropdown to reflect any pruned topics
+    updateTopicDropdown(allPosts);
+
+    // Re-filter and re-render preserving search and topic filters
+    filterAndRender();
+  } catch (err) {
+    logger.error("SAVED", `Failed to unsave post ${postId}:`, err);
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.textContent = "Unsave";
+    }
+    alert("Failed to unsave post. Please try again.");
+  } finally {
+    inFlightUnsaves.delete(postId);
+  }
+}
+
+export function renderPosts(posts) {
+  if (!postsList) return;
+
   if (posts.length === 0) {
-    postsList.innerHTML = `
-      <div class="empty-state">
-        <h3>No saved posts found</h3>
-        <p>Posts matching your auto-save rules or saved manually will appear here.</p>
-      </div>
-    `;
+    if (allPosts.length === 0) {
+      postsList.innerHTML = `
+        <div class="empty-state">
+          <h3>No saved posts found</h3>
+          <p>Posts matching your auto-save rules or saved manually will appear here.</p>
+        </div>
+      `;
+    } else {
+      postsList.innerHTML = `
+        <div class="empty-state">
+          <h3>No matching posts found</h3>
+          <p>No saved posts match your active search query or selected topic filter.</p>
+        </div>
+      `;
+    }
     return;
   }
 
@@ -74,6 +173,8 @@ function renderPosts(posts) {
         .map((t) => `<span class="badge badge-topic">#${escapeHtml(t)}</span>`)
         .join("");
 
+      const isUnsaving = inFlightUnsaves.has(p.id);
+
       return `
         <div class="post-card" data-id="${escapeHtml(p.id)}">
           <div class="card-header">
@@ -89,7 +190,9 @@ function renderPosts(posts) {
           <div class="post-text">${escapeHtml(p.text)}</div>
           <div class="card-footer">
             ${linkHtml}
-            <button class="btn btn-danger unsave-btn" data-id="${escapeHtml(p.id)}">Unsave</button>
+            <button class="btn btn-danger unsave-btn" data-id="${escapeHtml(p.id)}" ${isUnsaving ? "disabled" : ""}>
+              ${isUnsaving ? "Unsaving..." : "Unsave"}
+            </button>
           </div>
         </div>
       `;
@@ -100,32 +203,41 @@ function renderPosts(posts) {
   const buttons = postsList.querySelectorAll(".unsave-btn");
   buttons.forEach((btn) => {
     btn.addEventListener("click", async (e) => {
-      const id = e.target.getAttribute("data-id");
-      if (!id) return;
-      await unsavePost(id);
-      await load();
+      e.preventDefault();
+      const id = btn.getAttribute("data-id");
+      await handleUnsave(id, btn);
     });
   });
 }
 
-function filterAndRender() {
-  const q = searchInput.value.trim().toLowerCase();
-  const selTopic = topicSelect.value.trim().toLowerCase();
+export function filterAndRender() {
+  const q = searchInput ? searchInput.value.trim().toLowerCase() : "";
+  const selTopic = topicSelect ? topicSelect.value.trim().toLowerCase() : "";
 
   const filtered = allPosts.filter((p) => {
     if (selTopic) {
-      const hasTopic = (p.topics || []).some((t) => t.toLowerCase() === selTopic);
+      const hasTopic = (p.topics || []).some(
+        (t) => typeof t === "string" && t.trim().toLowerCase() === selTopic
+      );
       if (!hasTopic) return false;
     }
     if (q) {
       const matchText = (p.text || "").toLowerCase().includes(q);
       const matchAuthor = (p.author || "").toLowerCase().includes(q);
       const matchReason = (p.saveReason || "").toLowerCase().includes(q);
-      const matchTopic = (p.topics || []).some((t) => t.toLowerCase().includes(q));
+      const matchTopic = (p.topics || []).some(
+        (t) => typeof t === "string" && t.toLowerCase().includes(q)
+      );
       if (!matchText && !matchAuthor && !matchReason && !matchTopic) return false;
     }
     return true;
   });
+
+  if (allPosts.length === 0) {
+    currentPageState = PAGE_STATE.EMPTY;
+  } else {
+    currentPageState = PAGE_STATE.READY;
+  }
 
   renderStats(filtered, allPosts.length);
   renderPosts(filtered);
@@ -143,35 +255,55 @@ function downloadFile(filename, content, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-exportMdBtn.addEventListener("click", () => {
-  const md = exportToMarkdown(allPosts);
-  const filename = `linkedin-second-brain-${new Date().toISOString().slice(0, 10)}.md`;
-  downloadFile(filename, md, "text/markdown;charset=utf-8");
-});
+if (exportMdBtn) {
+  exportMdBtn.addEventListener("click", () => {
+    const md = exportToMarkdown(allPosts);
+    const filename = `linkedin-second-brain-${new Date().toISOString().slice(0, 10)}.md`;
+    downloadFile(filename, md, "text/markdown;charset=utf-8");
+  });
+}
 
-exportJsonBtn.addEventListener("click", () => {
-  const json = exportToJson(allPosts);
-  const filename = `linkedin-second-brain-${new Date().toISOString().slice(0, 10)}.json`;
-  downloadFile(filename, json, "application/json;charset=utf-8");
-});
+if (exportJsonBtn) {
+  exportJsonBtn.addEventListener("click", () => {
+    const json = exportToJson(allPosts);
+    const filename = `linkedin-second-brain-${new Date().toISOString().slice(0, 10)}.json`;
+    downloadFile(filename, json, "application/json;charset=utf-8");
+  });
+}
 
 if (openGraphBtn) {
-  console.log("[FeedRule][NAV] listener registered for #openGraphBtn in saved.js");
   openGraphBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log("[FeedRule][NAV] click intercepted on #openGraphBtn in saved.js, preventDefault executed");
     await openExtensionPage("graph");
   });
 }
 
-searchInput.addEventListener("input", filterAndRender);
-topicSelect.addEventListener("change", filterAndRender);
+if (searchInput) searchInput.addEventListener("input", filterAndRender);
+if (topicSelect) topicSelect.addEventListener("change", filterAndRender);
 
-async function load() {
-  allPosts = await getSavedPosts();
-  updateTopicDropdown(allPosts);
-  filterAndRender();
+export async function load() {
+  setPageState(PAGE_STATE.LOADING);
+  try {
+    allPosts = await getSavedPosts();
+    updateTopicDropdown(allPosts);
+    filterAndRender();
+  } catch (err) {
+    logger.error("SAVED", "Failed to load saved posts:", err);
+    setPageState(PAGE_STATE.ERROR, "Failed to load saved posts from storage.");
+  }
 }
 
-load();
+// Global accessor helpers for automated testing
+export function getAllPosts() {
+  return allPosts;
+}
+
+export function setAllPosts(posts) {
+  allPosts = posts || [];
+}
+
+// Auto-initialize in browser environment
+if (typeof document !== "undefined" && typeof window !== "undefined") {
+  load();
+}
