@@ -1,6 +1,7 @@
 // src/popup/popup.js
 import { getSettings, setSettings } from "../storage/rules-store.js";
 import { openExtensionPage } from "../navigation/navigation.js";
+import { logger } from "../utils/logger.js";
 
 const rulesEl = document.getElementById("rules");
 const saveRulesEl = document.getElementById("saveRules");
@@ -27,12 +28,10 @@ enabledEl.addEventListener("change", async () => {
   await setSettings({ enabled: enabledEl.checked });
 });
 
-console.log("[FeedRule][NAV] listeners registering in popup.js");
-
 document.getElementById("openGraph").addEventListener("click", async (e) => {
   e.preventDefault();
   e.stopPropagation();
-  console.log("[FeedRule][NAV] click intercepted on popup #openGraph");
+  logger.debug("NAV", "Popup navigating to graph");
   await openExtensionPage("graph");
   window.close();
 });
@@ -40,7 +39,7 @@ document.getElementById("openGraph").addEventListener("click", async (e) => {
 document.getElementById("openSaved").addEventListener("click", async (e) => {
   e.preventDefault();
   e.stopPropagation();
-  console.log("[FeedRule][NAV] click intercepted on popup #openSaved");
+  logger.debug("NAV", "Popup navigating to saved");
   await openExtensionPage("saved");
   window.close();
 });
@@ -48,7 +47,7 @@ document.getElementById("openSaved").addEventListener("click", async (e) => {
 document.getElementById("openDashboard").addEventListener("click", async (e) => {
   e.preventDefault();
   e.stopPropagation();
-  console.log("[FeedRule][NAV] click intercepted on popup #openDashboard");
+  logger.debug("NAV", "Popup navigating to dashboard");
   await openExtensionPage("dashboard");
   window.close();
 });
@@ -56,7 +55,7 @@ document.getElementById("openDashboard").addEventListener("click", async (e) => 
 document.getElementById("openOptions").addEventListener("click", async (e) => {
   e.preventDefault();
   e.stopPropagation();
-  console.log("[FeedRule][NAV] click intercepted on popup #openOptions");
+  logger.debug("NAV", "Popup navigating to options");
   await openExtensionPage("options");
   window.close();
 });

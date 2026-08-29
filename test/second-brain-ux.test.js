@@ -150,7 +150,7 @@ test("Second Brain Unsave: Preserves active search query and topic filters", asy
   globalThis.chrome = {
     storage: {
       local: {
-        get: async () => ({ savedPosts: {} }),
+        get: async () => ({ savedPosts: { "post:1": initialPosts[0] } }),
         set: async () => {},
       },
     },
@@ -166,6 +166,46 @@ test("Second Brain Unsave: Preserves active search query and topic filters", asy
     assert.ok(remaining.some((p) => p.id === "post:2"));
     assert.ok(remaining.some((p) => p.id === "post:3"));
   } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test("Second Brain Unsave Persistence Invariant: Storage returning false (unsuccessful) keeps post visible", async () => {
+  const initialPosts = [
+    { id: "post:existing", text: "Important note", author: "Alice", topics: ["AI"] },
+  ];
+  setAllPosts([...initialPosts]);
+
+  let alertCalled = false;
+  const originalAlert = globalThis.alert;
+  globalThis.alert = () => { alertCalled = true; };
+
+  // Mock chrome storage where the post key does NOT exist -> unsavePost returns false
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: async () => ({ savedPosts: {} }),
+        set: async () => {},
+      },
+    },
+  };
+
+  try {
+    const btn = { disabled: false, textContent: "Unsave" };
+    await handleUnsave("post:existing", btn);
+
+    // Invariant 1: Local state must NOT be mutated
+    assert.equal(getAllPosts().length, 1);
+    assert.equal(getAllPosts()[0].id, "post:existing");
+
+    // Invariant 2: Button state is restored
+    assert.equal(btn.disabled, false);
+    assert.equal(btn.textContent, "Unsave");
+
+    // Invariant 3: User receives feedback
+    assert.equal(alertCalled, true);
+  } finally {
+    globalThis.alert = originalAlert;
     delete globalThis.chrome;
   }
 });

@@ -4,6 +4,7 @@ import { getSettings } from "../storage/rules-store.js";
 import { computeDashboardAnalytics } from "../analytics/dashboard-analytics.js";
 import { renderTrendChart, renderTopicBarChart, escapeXml } from "./charts.js";
 import { openExtensionPage } from "../navigation/navigation.js";
+import { logger } from "../utils/logger.js";
 
 const statsGrid = document.getElementById("statsGrid");
 const trendChartContainer = document.getElementById("trendChartContainer");
@@ -155,12 +156,24 @@ function refreshDashboard() {
 }
 
 async function load() {
-  const [logs, settings] = await Promise.all([getLogEntries(), getSettings()]);
-  allLogs = logs;
-  activeSettings = settings;
+  try {
+    const [logs, settings] = await Promise.all([getLogEntries(), getSettings()]);
+    allLogs = logs || [];
+    activeSettings = settings || {};
 
-  updateTopicDropdown(allLogs);
-  refreshDashboard();
+    updateTopicDropdown(allLogs);
+    refreshDashboard();
+  } catch (err) {
+    logger.error("DASHBOARD", "Failed to load dashboard logs or settings:", err);
+    if (statsGrid) {
+      statsGrid.innerHTML = `
+        <div class="stat-card" style="grid-column:1/-1;">
+          <div class="num" style="font-size:16px; color:#d11;">Failed to load analytics</div>
+          <div class="label">Please reload the page or check storage permissions.</div>
+        </div>
+      `;
+    }
+  }
 }
 
 dateRangeSelect.addEventListener("change", refreshDashboard);
@@ -176,21 +189,19 @@ clearBtn.addEventListener("click", async () => {
 });
 
 if (openBrainBtn) {
-  console.log("[FeedRule][NAV] listener registered for #openBrainBtn");
   openBrainBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log("[FeedRule][NAV] click intercepted on #openBrainBtn, preventDefault executed");
+    logger.debug("NAV", "Dashboard navigating to saved");
     await openExtensionPage("saved");
   });
 }
 
 if (openGraphBtn) {
-  console.log("[FeedRule][NAV] listener registered for #openGraphBtn");
   openGraphBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log("[FeedRule][NAV] click intercepted on #openGraphBtn, preventDefault executed");
+    logger.debug("NAV", "Dashboard navigating to graph");
     await openExtensionPage("graph");
   });
 }

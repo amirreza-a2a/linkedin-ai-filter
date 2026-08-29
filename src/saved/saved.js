@@ -105,10 +105,16 @@ export async function handleUnsave(postId, btnElement) {
   try {
     const success = await unsavePost(postId);
     if (!success) {
-      logger.warn("SAVED", `Post ${postId} was not found in storage during unsave.`);
+      logger.warn("SAVED", `Storage unsave was unsuccessful for post ${postId}`);
+      if (btnElement) {
+        btnElement.disabled = false;
+        btnElement.textContent = "Unsave";
+      }
+      alert("Could not remove post from storage. Please try again.");
+      return;
     }
 
-    // Immediate local state update for snappy UI response
+    // Strictly only on confirmed persistent storage success:
     allPosts = allPosts.filter((p) => p.id !== postId);
 
     // Update topic dropdown to reflect any pruned topics

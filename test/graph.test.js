@@ -1087,3 +1087,30 @@ test("GraphRenderer - getConnectedNodeIds extracts exact neighborhood for active
   // Null active node returns null
   assert.equal(renderer.getConnectedNodeIds(null), null);
 });
+
+test("Knowledge Graph Stale State Invariant: Filtering out selected or focused node clears stale references", () => {
+  const posts = [
+    { id: "post:1", text: "AI agent architectures", author: "Alice", topics: ["AI"] },
+    { id: "post:2", text: "Rust systems programming", author: "Bob", topics: ["Rust"] },
+  ];
+
+  const fullGraph = buildKnowledgeGraph(posts);
+  assert.equal(fullGraph.nodes.length, 6); // 2 posts + 2 topics + 2 authors
+
+  // Simulate selecting the Rust author node
+  const selectedNode = fullGraph.nodes.find((n) => n.type === "author" && n.label === "Bob");
+  assert.ok(selectedNode);
+
+  // Now filter the graph to only topic "AI"
+  const filteredPosts = filterPostsByTopics(posts, ["AI"]);
+  const filteredGraph = buildKnowledgeGraph(filteredPosts);
+
+  // Invariant 1: The filtered graph does not contain Bob's author node
+  const bobStillInGraph = filteredGraph.nodes.some((n) => n.id === selectedNode.id);
+  assert.equal(bobStillInGraph, false);
+
+  // Invariant 2: extractNeighborhood on a missing focusedNodeId returns empty graph gracefully
+  const missingNeighborhood = extractNeighborhood(filteredGraph, selectedNode.id);
+  assert.equal(missingNeighborhood.nodes.length, 0);
+  assert.equal(missingNeighborhood.edges.length, 0);
+});

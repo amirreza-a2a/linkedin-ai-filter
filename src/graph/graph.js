@@ -452,6 +452,24 @@ function updateGraph() {
   const isUnchanged = areGraphsEqual(activeGraph, graph);
   activeGraph = graph;
 
+  // Stale Selection Invariant: If selected node is no longer in activeGraph, clear selection and reset sidebar
+  if (renderer && renderer.selectedNode) {
+    const nodeStillExists = activeGraph.nodes.some((n) => n.id === renderer.selectedNode.id);
+    if (!nodeStillExists) {
+      renderer.selectedNode = null;
+      renderNodeDetails(null);
+    }
+  }
+
+  // Stale Focus Invariant: If focused node is no longer in activeGraph, clear focus mode
+  if (focusedNodeId) {
+    const focusNodeStillExists = activeGraph.nodes.some((n) => n.id === focusedNodeId);
+    if (!focusNodeStillExists) {
+      focusedNodeId = null;
+      if (focusBanner) focusBanner.style.display = "none";
+    }
+  }
+
   logger.debug("GRAPH", "graph state:", {
     nodes: activeGraph.nodes.length,
     edges: activeGraph.edges.length,
