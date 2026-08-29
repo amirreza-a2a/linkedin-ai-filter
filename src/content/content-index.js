@@ -14,11 +14,12 @@ export const isDebugEnabled = () =>
 
 const CONTAINER_CANDIDATES = [
   "div.feed-shared-update-v2",
-  'div[data-testid="mainFeed"] div[role="listitem"]',
-  'div[role="listitem"]',
   "div[data-urn*='activity:']",
   "div[data-urn*='ugcPost:']",
+  "div[data-urn*='sponsoredUpdate:']",
   "div[data-id*='activity:']",
+  'div[data-testid="mainFeed"] div[role="listitem"]',
+  'div[role="listitem"]',
 ];
 
 const TEXT_CANDIDATES = [
@@ -26,6 +27,7 @@ const TEXT_CANDIDATES = [
   ".feed-shared-update-v2__description",
   ".update-components-text",
   ".feed-shared-text",
+  ".feed-shared-inline-show-more-text",
 ];
 
 const POST_LINK_CANDIDATES = [
@@ -114,20 +116,51 @@ export function extractPost(el) {
   return { id, text, author, authorUrl, postUrl, el };
 }
 
-function findContainers(root) {
-  const candidates = new Set();
+/**
+ * Finds candidate container elements with deduplication favoring canonical inner update nodes.
+ *
+ * @param {Element|Object} root
+ * @returns {Array<Element|Object>}
+ */
+export function findContainers(root) {
+  if (!root || typeof root.querySelectorAll !== "function") return [];
 
+  const rawCandidates = [];
   for (const sel of CONTAINER_CANDIDATES) {
     if (root.matches?.(sel)) {
-      candidates.add(root);
+      rawCandidates.push({ node: root, selector: sel });
     }
-    const found = root.querySelectorAll?.(sel) || [];
+    const found = root.querySelectorAll(sel) || [];
     for (const node of found) {
-      candidates.add(node);
+      rawCandidates.push({ node, selector: sel });
     }
   }
 
-  return Array.from(candidates);
+  // Deduplicate and filter out redundant outer wrappers when an inner canonical update exists
+  const uniqueNodes = new Set();
+  const canonicalNodes = [];
+
+  for (const item of rawCandidates) {
+    const node = item.node;
+    if (uniqueNodes.has(node)) continue;
+    uniqueNodes.add(node);
+
+    // If this is a generic listitem that wraps an inner .feed-shared-update-v2, prefer the inner container
+    if (node.getAttribute?.("role") === "listitem" && !node.classList?.contains?.("feed-shared-update-v2")) {
+      const innerUpdate = node.querySelector?.(".feed-shared-update-v2, [data-urn*='activity:']");
+      if (innerUpdate) {
+        if (!uniqueNodes.has(innerUpdate)) {
+          uniqueNodes.add(innerUpdate);
+          canonicalNodes.push(innerUpdate);
+        }
+        continue;
+      }
+    }
+
+    canonicalNodes.push(node);
+  }
+
+  return canonicalNodes;
 }
 
 // --- DOM filtering ---------------------------------------------------
@@ -257,21 +290,35 @@ export function scan(root) {
     if (seen.has(node)) continue;
     seen.add(node);
 
-    // Dedicated Post Qualification Layer
-    const qualification = isLikelyPostContainer(node);
-    if (!qualification.qualified) {
-      if (isDebugEnabled()) {
-        console.log(`[FeedRule] REJECTED: ${qualification.reason}`, node);
-      }
+    // Two-Stage Post Qualification Layer
+    const qual = isLikelyPostContainer(node);
+
+    if (isDebugEnabled()) {
+      const sigs = qual.signals || {};
+      console.log(
+        `[FeedRule] CANDIDATE\n` +
+          `class=${node.getAttribute?.("class") || ""}\n` +
+          `urn=${Boolean(sigs.urn)} permalink=${Boolean(sigs.permalink)} actor=${Boolean(sigs.actor)} text=${Boolean(sigs.text)} authorLink=${Boolean(sigs.authorLink)}\n` +
+          `score=${qual.score} decision=${qual.decision} reason=${qual.reason}`
+      );
+    }
+
+    if (qual.decision === "REJECT") {
       continue;
     }
 
-    if (isDebugEnabled()) {
-      console.log(`[FeedRule] ACCEPTED: ${qualification.reason}`, node);
-    }
-
+    // Process ACCEPT and AMBIGUOUS candidates through extractPost
     const post = extractPost(node);
-    if (post) pending.push(post);
+    if (post) {
+      if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
+        console.log(`[FeedRule] AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
+      }
+      pending.push(post);
+    } else {
+      if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
+        console.log(`[FeedRule] AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
+      }
+    }
   }
 }
 
