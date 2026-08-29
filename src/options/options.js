@@ -1,6 +1,7 @@
 // src/options/options.js
 import { getSettings, setSettings } from "../storage/rules-store.js";
 import { validateAndNormalizeBaseUrl, getRequiredOriginPattern } from "../llm/url-helper.js";
+import { testProviderConnection } from "../llm/test-connection.js";
 import {
   clearSavedPostsData,
   clearDecisionLogData,
@@ -30,7 +31,97 @@ export const els = {
   get clearCacheBtn() { return getEl("clearCacheBtn"); },
   get clearAllBtn() { return getEl("clearAllBtn"); },
   get saveBtn() { return getEl("save"); },
+  get testOpenAiBtn() { return getEl("testOpenAiBtn"); },
+  get openaiTestStatus() { return getEl("openaiTestStatus"); },
+  get testGeminiBtn() { return getEl("testGeminiBtn"); },
+  get geminiTestStatus() { return getEl("geminiTestStatus"); },
+  get testClaudeBtn() { return getEl("testClaudeBtn"); },
+  get claudeTestStatus() { return getEl("claudeTestStatus"); },
 };
+
+// In-flight connection tests tracker
+const inFlightTests = new Set();
+
+/**
+ * Handles executing a connection test for a specific provider using current DOM values.
+ *
+ * @param {"openai"|"gemini"|"claude"} provider
+ * @param {HTMLButtonElement|null} btn
+ * @param {HTMLElement|null} statusEl
+ * @returns {Promise<Object>}
+ */
+export async function handleTestConnection(provider, btn, statusEl) {
+  if (inFlightTests.has(provider)) return;
+  inFlightTests.add(provider);
+
+  const originalText = btn ? btn.textContent : "Test Connection";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Testing...";
+  }
+
+  if (statusEl) {
+    statusEl.textContent = "Testing connection...";
+    statusEl.className = "test-conn-status status-loading";
+  }
+
+  try {
+    let apiKey = "";
+    let model = "";
+    let baseUrl = "";
+
+    if (provider === "openai") {
+      apiKey = els.openaiKey ? els.openaiKey.value : "";
+      model = els.openaiModel ? els.openaiModel.value : "";
+      baseUrl = els.openaiBaseUrl ? els.openaiBaseUrl.value : "";
+    } else if (provider === "gemini") {
+      apiKey = els.geminiKey ? els.geminiKey.value : "";
+      model = els.geminiModel ? els.geminiModel.value : "";
+      baseUrl = els.geminiBaseUrl ? els.geminiBaseUrl.value : "";
+    } else if (provider === "claude") {
+      apiKey = els.claudeKey ? els.claudeKey.value : "";
+      model = els.claudeModel ? els.claudeModel.value : "";
+      baseUrl = els.claudeBaseUrl ? els.claudeBaseUrl.value : "";
+    }
+
+    const result = await testProviderConnection({
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+    });
+
+    if (statusEl) {
+      if (result.ok) {
+        statusEl.textContent = `✓ Connection successful · ${result.latencyMs}ms`;
+        statusEl.className = "test-conn-status status-success";
+      } else {
+        statusEl.textContent = `✕ ${result.message}`;
+        statusEl.className = "test-conn-status status-error";
+      }
+    }
+
+    return result;
+  } catch (err) {
+    if (statusEl) {
+      statusEl.textContent = `✕ ${err.message || "Test failed"}`;
+      statusEl.className = "test-conn-status status-error";
+    }
+    return {
+      ok: false,
+      provider,
+      errorCode: "UNEXPECTED_ERROR",
+      message: err.message || "Test failed",
+      latencyMs: 0,
+    };
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+    inFlightTests.delete(provider);
+  }
+}
 
 /**
  * Updates DOM visibility to display only the active provider's configuration section.
@@ -92,6 +183,24 @@ if (typeof document !== "undefined") {
   if (els.provider) {
     els.provider.addEventListener("change", () => {
       updateProviderVisibility(els.provider.value);
+    });
+  }
+
+  if (els.testOpenAiBtn) {
+    els.testOpenAiBtn.addEventListener("click", () => {
+      handleTestConnection("openai", els.testOpenAiBtn, els.openaiTestStatus);
+    });
+  }
+
+  if (els.testGeminiBtn) {
+    els.testGeminiBtn.addEventListener("click", () => {
+      handleTestConnection("gemini", els.testGeminiBtn, els.geminiTestStatus);
+    });
+  }
+
+  if (els.testClaudeBtn) {
+    els.testClaudeBtn.addEventListener("click", () => {
+      handleTestConnection("claude", els.testClaudeBtn, els.claudeTestStatus);
     });
   }
 

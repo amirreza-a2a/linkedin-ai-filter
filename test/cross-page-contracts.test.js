@@ -92,6 +92,12 @@ test("Contract Audit: Options JS required DOM element IDs exist in options.html"
     "clearCacheBtn",
     "clearAllBtn",
     "save",
+    "testOpenAiBtn",
+    "openaiTestStatus",
+    "testGeminiBtn",
+    "geminiTestStatus",
+    "testClaudeBtn",
+    "claudeTestStatus",
   ];
 
   for (const id of requiredIds) {
