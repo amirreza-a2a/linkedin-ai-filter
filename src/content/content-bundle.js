@@ -71,7 +71,195 @@
     }
   }
 
-  // --- 3. Post Container Qualifier ---
+  // --- 3. Diagnostic Overlay Subsystem ---
+  // src/content/debug-overlay.js
+  // Production Debug Visualization Mode for FeedRule LinkedIn Content Script.
+  // Renders per-candidate diagnostic overlays displaying real pipeline stages,
+  // qualification score, extraction state, request gateway state, and terminal status.
+  
+  function isDiagnosticModeEnabled() {
+    if (typeof window === "undefined") return false;
+    if (window.__FEEDRULE_DIAGNOSTIC__ === true) return true;
+    try {
+      return (
+        sessionStorage.getItem("FEEDRULE_DIAGNOSTIC") === "1" ||
+        localStorage.getItem("FEEDRULE_DIAGNOSTIC") === "1"
+      );
+    } catch {
+      return false;
+    }
+  }
+  
+  // Stage Tracker Map for DOM Elements (WeakMap allows automatic GC of unmounted nodes)
+  const elementDiagnosticStates = new WeakMap();
+  
+  /**
+   * Updates diagnostic overlay badge on candidate element.
+   *
+   * @param {Element} el
+   * @param {Partial<{
+   *   stage: string,
+   *   terminal: string,
+   *   postId: string,
+   *   author: string,
+   *   qualified: boolean,
+   *   score: number,
+   *   reason: string,
+   *   provider: string,
+   *   model: string,
+   *   attempts: number,
+   *   error: string,
+   *   hide: boolean,
+   *   domState: string
+   * }>} data
+   */
+  function updateDiagnosticOverlay(el, data = {}) {
+    if (!el || el.nodeType !== 1 || !isDiagnosticModeEnabled()) return;
+  
+    const current = elementDiagnosticStates.get(el) || {
+      stage: "DISCOVERED",
+      terminal: "DISCOVERED",
+      postId: el.getAttribute("data-lazy-mount-id") || el.getAttribute("data-urn") || "unknown",
+      author: "Unknown",
+      qualified: null,
+      score: null,
+      reason: "",
+      provider: "",
+      model: "",
+      attempts: 0,
+      error: "",
+      hide: null,
+      domState: "UNTOUCHED"
+    };
+  
+    const updated = { ...current, ...data };
+    elementDiagnosticStates.set(el, updated);
+  
+    // Set machine-readable attributes
+    try {
+      el.setAttribute("data-feedrule-debug", "true");
+      if (updated.stage) el.setAttribute("data-feedrule-stage", updated.stage);
+      if (updated.terminal) el.setAttribute("data-feedrule-terminal", updated.terminal);
+      if (updated.postId) el.setAttribute("data-feedrule-post-id", updated.postId);
+      if (updated.qualified !== null) el.setAttribute("data-feedrule-qualified", String(updated.qualified));
+      if (updated.score !== null) el.setAttribute("data-feedrule-score", String(updated.score));
+      if (updated.hide !== null) el.setAttribute("data-feedrule-hide", String(updated.hide));
+      if (updated.error) el.setAttribute("data-feedrule-error", updated.error);
+    } catch {}
+  
+    // Render or update UI Badge
+    renderBadge(el, updated);
+  }
+  
+  function getStatusTheme(terminal = "") {
+    switch (terminal) {
+      case "DOM_HIDDEN":
+      case "API_SUCCESS_HIDE":
+        return { border: "#8a2be2", bg: "#f3e8ff", text: "#581c87", label: "PURPLE (HIDDEN)" };
+      case "DOM_VISIBLE":
+      case "API_SUCCESS_SHOW":
+        return { border: "#16a34a", bg: "#f0fdf4", text: "#14532d", label: "GREEN (VISIBLE)" };
+      case "DISPATCHED":
+      case "IN_FLIGHT":
+        return { border: "#ea580c", bg: "#fff7ed", text: "#7c2d12", label: "ORANGE (IN FLIGHT)" };
+      case "QUEUED":
+        return { border: "#2563eb", bg: "#eff6ff", text: "#1e3a8a", label: "BLUE (QUEUED)" };
+      case "API_TIMEOUT":
+      case "API_ERROR":
+      case "EXTRACTION_FAILED":
+      case "REJECTED_COMPOSER":
+      case "REJECTED_NOT_POST":
+        return { border: "#dc2626", bg: "#fef2f2", text: "#7f1d1d", label: "RED (FAILURE/REJECT)" };
+      case "DISCOVERED":
+      default:
+        return { border: "#64748b", bg: "#f8fafc", text: "#0f172a", label: "GRAY (DISCOVERED)" };
+    }
+  }
+  
+  function renderBadge(el, state) {
+    if (typeof document === "undefined" || !el.isConnected) return;
+  
+    let badge = el.querySelector(":scope > .feedrule-debug-overlay");
+    if (!badge) {
+      badge = document.createElement("div");
+      badge.className = "feedrule-debug-overlay";
+      try {
+        el.insertBefore(badge, el.firstChild);
+      } catch {
+        el.appendChild(badge);
+      }
+    }
+  
+    const theme = getStatusTheme(state.terminal);
+  
+    badge.style.cssText = `
+      position: relative;
+      z-index: 999999;
+      margin: 4px 0;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 2px solid ${theme.border};
+      background: ${theme.bg};
+      color: ${theme.text};
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      pointer-events: auto;
+      user-select: text;
+      display: block !important;
+    `;
+  
+    const qualText = state.qualified === null 
+      ? "PENDING" 
+      : state.qualified ? `✓ ACCEPT (${state.score ?? 0})` : `✗ REJECT (${state.reason || "unqualified"})`;
+  
+    const queueText = state.stage === "QUEUED" || state.stage === "DISPATCHED" || state.stage === "RESPONSE_RECEIVED" || state.stage === "DOM_APPLIED"
+      ? "✓ YES"
+      : (state.qualified === false ? "✗ NO (REJECTED)" : "PENDING");
+  
+    const dispatchText = state.stage === "DISPATCHED" || state.stage === "RESPONSE_RECEIVED" || state.stage === "DOM_APPLIED"
+      ? "✓ YES"
+      : (state.stage === "QUEUED" ? "PENDING FLUSH" : "NO");
+  
+    const responseText = state.stage === "RESPONSE_RECEIVED" || state.stage === "DOM_APPLIED"
+      ? (state.error ? `✗ ${state.error}` : `✓ ${state.hide ? "HIDE" : "SHOW"}`)
+      : (state.stage === "DISPATCHED" ? "AWAITING GATEWAY..." : "NONE");
+  
+    const domText = state.domState || "UNTOUCHED";
+  
+    badge.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid ${theme.border}; padding-bottom:4px; margin-bottom:4px; font-weight:bold;">
+        <span>[FeedRule Diagnostic] ID: ${escapeHtml(state.postId)}</span>
+        <span style="font-size:10px; background:${theme.border}; color:#fff; padding:2px 6px; border-radius:4px;">${escapeHtml(state.terminal)}</span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <div><strong>Author:</strong> ${escapeHtml(state.author || "Unknown")}</div>
+        <div><strong>Score:</strong> ${state.score !== null ? state.score : "N/A"}</div>
+        <div><strong>1. DISCOVERED:</strong> ✓</div>
+        <div><strong>2. QUALIFY:</strong> ${qualText}</div>
+        <div><strong>3. EXTRACT:</strong> ${state.author !== "Unknown" || state.postId ? "✓ OK" : "PENDING"}</div>
+        <div><strong>4. QUEUE:</strong> ${queueText}</div>
+        <div><strong>5. DISPATCH:</strong> ${dispatchText}</div>
+        <div><strong>6. RESPONSE:</strong> ${responseText}</div>
+        <div><strong>7. DOM STATE:</strong> <strong>${escapeHtml(domText)}</strong></div>
+        <div><strong>Provider/Model:</strong> ${escapeHtml(state.provider || "-")}/${escapeHtml(state.model || "-")}</div>
+      </div>
+      ${state.error ? `<div style="color:#b91c1c; margin-top:4px; font-weight:bold;">Error: ${escapeHtml(state.error)}</div>` : ""}
+    `;
+  }
+  
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // --- 4. Post Container Qualifier ---
   // src/content/post-qualifier.js
   // Conservative Two-Stage Post Container Qualification Layer for LinkedIn DOM.
   // Balances strict negative protection (composers, carousels, comments)
@@ -421,7 +609,7 @@
     };
   }
 
-  // --- 4. Author Extractor ---
+  // --- 5. Author Extractor ---
   // src/content/author-extractor.js
   // Ranked candidate-selection author identity extractor for LinkedIn posts.
   // Supports personal (/in/), company (/company/), school (/school/), and showcase (/showcase/) profiles.
@@ -791,11 +979,12 @@
     return { author: "", authorUrl: "" };
   }
 
-  // --- 5. Content Script Core Pipeline ---
+  // --- 6. Content Script Core Pipeline ---
   // src/content/content-index.js
   // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
   // Identity-aware incremental reprocessing for initial load, Load More, container reuse, and video autoplay.
   // High-performance architecture: non-feed fast rejection, scoped mutation routing, cached video state, and 0 in-flight memory leaks.
+  
   
   
   
@@ -860,24 +1049,22 @@
     "a.app-aware-link[href*='/posts/']",
   ];
   
-  // --- Performance Instrumentation Counters (Dev / Diagnostic) ---------
+  // Production performance metrics
   const performanceStats = {
     mutationCallbacks: 0,
     childListMutations: 0,
     attributeMutations: 0,
     classMutations: 0,
     identityMutations: 0,
-    relevantMutations: 0,
     ignoredMutations: 0,
-    feedContainerResolutions: 0,
-    postContainerResolutions: 0,
+    relevantMutations: 0,
+    mutationQueueMaxSize: 0,
+    mutationQueueFlushes: 0,
     scanCalls: 0,
-    findContainersCalls: 0,
     querySelectorAllCalls: 0,
     videoPauseTraversals: 0,
     videosPaused: 0,
     classificationDispatches: 0,
-    mutationQueueMaxSize: 0,
     inFlightElementMaxSize: 0,
     observerAttachCount: 0,
     observerDisconnectCount: 0,
@@ -888,7 +1075,7 @@
     maxMutationProcessingTimeMs: 0,
     scanProcessingTimeMs: 0,
     maxScanProcessingTimeMs: 0,
-    startTime: typeof Date !== "undefined" ? Date.now() : 0,
+    startTime: typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(),
   };
   
   function resetPerformanceStats() {
@@ -897,17 +1084,15 @@
     performanceStats.attributeMutations = 0;
     performanceStats.classMutations = 0;
     performanceStats.identityMutations = 0;
-    performanceStats.relevantMutations = 0;
     performanceStats.ignoredMutations = 0;
-    performanceStats.feedContainerResolutions = 0;
-    performanceStats.postContainerResolutions = 0;
+    performanceStats.relevantMutations = 0;
+    performanceStats.mutationQueueMaxSize = 0;
+    performanceStats.mutationQueueFlushes = 0;
     performanceStats.scanCalls = 0;
-    performanceStats.findContainersCalls = 0;
     performanceStats.querySelectorAllCalls = 0;
     performanceStats.videoPauseTraversals = 0;
     performanceStats.videosPaused = 0;
     performanceStats.classificationDispatches = 0;
-    performanceStats.mutationQueueMaxSize = 0;
     performanceStats.inFlightElementMaxSize = 0;
     performanceStats.observerAttachCount = 0;
     performanceStats.observerDisconnectCount = 0;
@@ -993,7 +1178,9 @@
     // Extension-injected UI is never an unclassified post container
     if (
       node.classList?.contains?.("feedrule-placeholder") ||
-      node.classList?.contains?.("feedrule-show-btn")
+      node.classList?.contains?.("feedrule-show-btn") ||
+      node.classList?.contains?.("feedrule-debug-overlay") ||
+      node.classList?.contains?.("feedrule-debug-badge")
     ) {
       return false;
     }
@@ -1163,6 +1350,15 @@
     }
   
     logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
+    if (isDiagnosticModeEnabled()) {
+      for (const node of filteredNodes) {
+        updateDiagnosticOverlay(node, {
+          stage: "DISCOVERED",
+          terminal: "DISCOVERED",
+          postId: node.getAttribute("data-lazy-mount-id") || node.getAttribute("data-urn") || "unknown",
+        });
+      }
+    }
     return filteredNodes;
   }
   
@@ -1199,6 +1395,15 @@
     cacheDecision(decision.id, decision);
     inFlightPostIds.delete(decision.id);
     elementById.delete(decision.id);
+  
+    // Diagnostic overlay update
+    updateDiagnosticOverlay(el, {
+      stage: "DOM_APPLIED",
+      terminal: decision.hide ? "DOM_HIDDEN" : "DOM_VISIBLE",
+      hide: decision.hide,
+      reason: decision.reason,
+      domState: decision.hide ? "HIDDEN" : "VISIBLE",
+    });
   
     // Stale selection protection: if el is currently bound to a different post, do not touch this element
     const currentPostOnNode = nodeToPostId.get(el);
@@ -1320,7 +1525,16 @@
     performanceStats.classificationDispatches++;
     logger.trace("CLASSIFY_DISPATCH", `count=${batch.length} ids=${JSON.stringify(batch.map((p) => p.id))}`);
   
-    for (const post of batch) elementById.set(post.id, post.el);
+    for (const post of batch) {
+      elementById.set(post.id, post.el);
+      if (post.el) {
+        updateDiagnosticOverlay(post.el, {
+          stage: "DISPATCHED",
+          terminal: "DISPATCHED",
+          postId: post.id,
+        });
+      }
+    }
   
     if (elementById.size > performanceStats.inFlightElementMaxSize) {
       performanceStats.inFlightElementMaxSize = elementById.size;
@@ -1346,6 +1560,15 @@
               chrome.runtime.lastError.message
             );
             for (const post of batch) {
+              const el = post.el || elementById.get(post.id);
+              if (el) {
+                updateDiagnosticOverlay(el, {
+                  stage: "RESPONSE_RECEIVED",
+                  terminal: "API_ERROR",
+                  error: chrome.runtime.lastError.message,
+                  domState: "VISIBLE (FAIL-OPEN)",
+                });
+              }
               inFlightPostIds.delete(post.id);
               elementById.delete(post.id);
             }
@@ -1362,6 +1585,18 @@
   
             const el = elementById.get(decision.id);
             elementById.delete(decision.id); // Immediate release of DOM reference for garbage collection
+  
+            if (el) {
+              updateDiagnosticOverlay(el, {
+                stage: "RESPONSE_RECEIVED",
+                terminal: decision.hide ? "API_SUCCESS_HIDE" : "API_SUCCESS_SHOW",
+                hide: decision.hide,
+                reason: decision.reason,
+                provider: response?.provider || "",
+                model: response?.model || "",
+                error: decision.error || "",
+              });
+            }
   
             // Stale selection protection: verify DOM element has not been recycled for a different post
             if (el && nodeToPostId.get(el) === decision.id) {
@@ -1380,6 +1615,15 @@
     } catch (err) {
       logger.warn("CONTENT", "extension context disconnected:", err);
       for (const post of batch) {
+        const el = post.el || elementById.get(post.id);
+        if (el) {
+          updateDiagnosticOverlay(el, {
+            stage: "RESPONSE_RECEIVED",
+            terminal: "API_ERROR",
+            error: err.message || "extension context disconnected",
+            domState: "VISIBLE (FAIL-OPEN)",
+          });
+        }
         inFlightPostIds.delete(post.id);
         elementById.delete(post.id);
       }
@@ -1451,6 +1695,18 @@
   
       logger.trace("QUALIFICATION", `decision=${qual.decision} score=${qual.score} reason=${qual.reason}`);
   
+      updateDiagnosticOverlay(node, {
+        stage: "QUALIFIED",
+        terminal: qual.qualified
+          ? "QUALIFIED"
+          : qual.reason === "composer"
+          ? "REJECTED_COMPOSER"
+          : "REJECTED_NOT_POST",
+        qualified: qual.qualified,
+        score: qual.score,
+        reason: qual.reason,
+      });
+  
       if (isDebugEnabled()) {
         const sigs = qual.signals || {};
         logger.debug(
@@ -1469,11 +1725,22 @@
       // Process ACCEPT and AMBIGUOUS candidates through extractPost
       const post = extractPost(node);
       if (!post) {
+        updateDiagnosticOverlay(node, {
+          stage: "EXTRACTED",
+          terminal: "EXTRACTION_FAILED",
+          error: "extractPost returned null",
+        });
         if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
           logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
         }
         continue;
       }
+  
+      updateDiagnosticOverlay(node, {
+        stage: "EXTRACTED",
+        postId: post.id,
+        author: post.author,
+      });
   
       logger.trace("POST_EXTRACTED", `id=${post.id} author="${post.author}"`);
   
@@ -1510,6 +1777,13 @@
             `[POST] id=${post.id} decision=${cachedDecision.hide ? "HIDE" : "SHOW"} alreadyProcessed=true (cached)`
           );
         }
+        updateDiagnosticOverlay(node, {
+          stage: "DOM_APPLIED",
+          terminal: cachedDecision.hide ? "DOM_HIDDEN" : "DOM_VISIBLE",
+          hide: cachedDecision.hide,
+          reason: cachedDecision.reason,
+          domState: cachedDecision.hide ? "HIDDEN (CACHED)" : "VISIBLE (CACHED)",
+        });
         applyDecision(node, cachedDecision);
         continue;
       }
@@ -1522,6 +1796,12 @@
             `[POST] id=${post.id} decision=PENDING alreadyProcessed=true (in-flight)`
           );
         }
+        updateDiagnosticOverlay(node, {
+          stage: "QUEUED",
+          terminal: "QUEUED",
+          postId: post.id,
+          author: post.author,
+        });
         // Update element mapping in case node reference changed
         elementById.set(post.id, node);
         continue;
@@ -1532,6 +1812,13 @@
       if (isDebugEnabled()) {
         logger.debug("CONTENT", `[POST] id=${post.id} decision=UNPROCESSED alreadyProcessed=false`);
       }
+  
+      updateDiagnosticOverlay(node, {
+        stage: "QUEUED",
+        terminal: "QUEUED",
+        postId: post.id,
+        author: post.author,
+      });
   
       inFlightPostIds.add(post.id);
       elementById.set(post.id, node);
@@ -1880,6 +2167,8 @@
     window.isLikelyPostContainer = isLikelyPostContainer;
     window.extractPost = extractPost;
     window.scan = scan;
+    window.isDiagnosticModeEnabled = isDiagnosticModeEnabled;
+    window.updateDiagnosticOverlay = updateDiagnosticOverlay;
     window.addEventListener("popstate", () => initFeedObserver(document));
   }
   

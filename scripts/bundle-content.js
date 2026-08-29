@@ -15,6 +15,7 @@ function bundle() {
   const qualifierSrc = fs.readFileSync(path.join(rootDir, "src/content/post-qualifier.js"), "utf-8");
   const extractorSrc = fs.readFileSync(path.join(rootDir, "src/content/author-extractor.js"), "utf-8");
   const storeSrc = fs.readFileSync(path.join(rootDir, "src/storage/saved-posts-store.js"), "utf-8");
+  const debugOverlaySrc = fs.readFileSync(path.join(rootDir, "src/content/debug-overlay.js"), "utf-8");
   const indexSrc = fs.readFileSync(path.join(rootDir, "src/content/content-index.js"), "utf-8");
 
   // Extract sanitizeUrl from saved-posts-store.js
@@ -31,6 +32,11 @@ function bundle() {
 
   // Strip imports and exports from author-extractor.js
   const extractorCode = extractorSrc
+    .replace(/^import\s+[\s\S]*?;\s*$/gm, "")
+    .replace(/^export\s+(const|let|var|function)/gm, "$1");
+
+  // Strip imports and exports from debug-overlay.js
+  const debugOverlayCode = debugOverlaySrc
     .replace(/^import\s+[\s\S]*?;\s*$/gm, "")
     .replace(/^export\s+(const|let|var|function)/gm, "$1");
 
@@ -56,13 +62,16 @@ function bundle() {
   // --- 2. URL Sanitization Helper ---
   ${sanitizeUrlCode.trim().split("\n").join("\n  ")}
 
-  // --- 3. Post Container Qualifier ---
+  // --- 3. Diagnostic Overlay Subsystem ---
+  ${debugOverlayCode.trim().split("\n").join("\n  ")}
+
+  // --- 4. Post Container Qualifier ---
   ${qualifierCode.trim().split("\n").join("\n  ")}
 
-  // --- 4. Author Extractor ---
+  // --- 5. Author Extractor ---
   ${extractorCode.trim().split("\n").join("\n  ")}
 
-  // --- 5. Content Script Core Pipeline ---
+  // --- 6. Content Script Core Pipeline ---
   ${indexCode.trim().split("\n").join("\n  ")}
 })();
 `;

@@ -6,6 +6,7 @@
 import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
 import { logger, isDebugEnabled } from "../utils/logger.js";
+import { updateDiagnosticOverlay, isDiagnosticModeEnabled } from "./debug-overlay.js";
 
 logger.debug("CONTENT", "content script module loaded on", typeof location !== "undefined" ? location.href : "");
 
@@ -67,24 +68,22 @@ const POST_LINK_CANDIDATES = [
   "a.app-aware-link[href*='/posts/']",
 ];
 
-// --- Performance Instrumentation Counters (Dev / Diagnostic) ---------
-export const performanceStats = {
+// Production performance metrics
+const performanceStats = {
   mutationCallbacks: 0,
   childListMutations: 0,
   attributeMutations: 0,
   classMutations: 0,
   identityMutations: 0,
-  relevantMutations: 0,
   ignoredMutations: 0,
-  feedContainerResolutions: 0,
-  postContainerResolutions: 0,
+  relevantMutations: 0,
+  mutationQueueMaxSize: 0,
+  mutationQueueFlushes: 0,
   scanCalls: 0,
-  findContainersCalls: 0,
   querySelectorAllCalls: 0,
   videoPauseTraversals: 0,
   videosPaused: 0,
   classificationDispatches: 0,
-  mutationQueueMaxSize: 0,
   inFlightElementMaxSize: 0,
   observerAttachCount: 0,
   observerDisconnectCount: 0,
@@ -95,7 +94,7 @@ export const performanceStats = {
   maxMutationProcessingTimeMs: 0,
   scanProcessingTimeMs: 0,
   maxScanProcessingTimeMs: 0,
-  startTime: typeof Date !== "undefined" ? Date.now() : 0,
+  startTime: typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(),
 };
 
 export function resetPerformanceStats() {
@@ -104,17 +103,15 @@ export function resetPerformanceStats() {
   performanceStats.attributeMutations = 0;
   performanceStats.classMutations = 0;
   performanceStats.identityMutations = 0;
-  performanceStats.relevantMutations = 0;
   performanceStats.ignoredMutations = 0;
-  performanceStats.feedContainerResolutions = 0;
-  performanceStats.postContainerResolutions = 0;
+  performanceStats.relevantMutations = 0;
+  performanceStats.mutationQueueMaxSize = 0;
+  performanceStats.mutationQueueFlushes = 0;
   performanceStats.scanCalls = 0;
-  performanceStats.findContainersCalls = 0;
   performanceStats.querySelectorAllCalls = 0;
   performanceStats.videoPauseTraversals = 0;
   performanceStats.videosPaused = 0;
   performanceStats.classificationDispatches = 0;
-  performanceStats.mutationQueueMaxSize = 0;
   performanceStats.inFlightElementMaxSize = 0;
   performanceStats.observerAttachCount = 0;
   performanceStats.observerDisconnectCount = 0;
@@ -200,7 +197,9 @@ export function isRelevantFeedScope(node) {
   // Extension-injected UI is never an unclassified post container
   if (
     node.classList?.contains?.("feedrule-placeholder") ||
-    node.classList?.contains?.("feedrule-show-btn")
+    node.classList?.contains?.("feedrule-show-btn") ||
+    node.classList?.contains?.("feedrule-debug-overlay") ||
+    node.classList?.contains?.("feedrule-debug-badge")
   ) {
     return false;
   }
@@ -370,6 +369,15 @@ export function findContainers(root) {
   }
 
   logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
+  if (isDiagnosticModeEnabled()) {
+    for (const node of filteredNodes) {
+      updateDiagnosticOverlay(node, {
+        stage: "DISCOVERED",
+        terminal: "DISCOVERED",
+        postId: node.getAttribute("data-lazy-mount-id") || node.getAttribute("data-urn") || "unknown",
+      });
+    }
+  }
   return filteredNodes;
 }
 
@@ -406,6 +414,15 @@ export function applyDecision(el, decision) {
   cacheDecision(decision.id, decision);
   inFlightPostIds.delete(decision.id);
   elementById.delete(decision.id);
+
+  // Diagnostic overlay update
+  updateDiagnosticOverlay(el, {
+    stage: "DOM_APPLIED",
+    terminal: decision.hide ? "DOM_HIDDEN" : "DOM_VISIBLE",
+    hide: decision.hide,
+    reason: decision.reason,
+    domState: decision.hide ? "HIDDEN" : "VISIBLE",
+  });
 
   // Stale selection protection: if el is currently bound to a different post, do not touch this element
   const currentPostOnNode = nodeToPostId.get(el);
@@ -527,7 +544,16 @@ function sendBatchMessage(batch, callback) {
   performanceStats.classificationDispatches++;
   logger.trace("CLASSIFY_DISPATCH", `count=${batch.length} ids=${JSON.stringify(batch.map((p) => p.id))}`);
 
-  for (const post of batch) elementById.set(post.id, post.el);
+  for (const post of batch) {
+    elementById.set(post.id, post.el);
+    if (post.el) {
+      updateDiagnosticOverlay(post.el, {
+        stage: "DISPATCHED",
+        terminal: "DISPATCHED",
+        postId: post.id,
+      });
+    }
+  }
 
   if (elementById.size > performanceStats.inFlightElementMaxSize) {
     performanceStats.inFlightElementMaxSize = elementById.size;
@@ -553,6 +579,15 @@ function sendBatchMessage(batch, callback) {
             chrome.runtime.lastError.message
           );
           for (const post of batch) {
+            const el = post.el || elementById.get(post.id);
+            if (el) {
+              updateDiagnosticOverlay(el, {
+                stage: "RESPONSE_RECEIVED",
+                terminal: "API_ERROR",
+                error: chrome.runtime.lastError.message,
+                domState: "VISIBLE (FAIL-OPEN)",
+              });
+            }
             inFlightPostIds.delete(post.id);
             elementById.delete(post.id);
           }
@@ -569,6 +604,18 @@ function sendBatchMessage(batch, callback) {
 
           const el = elementById.get(decision.id);
           elementById.delete(decision.id); // Immediate release of DOM reference for garbage collection
+
+          if (el) {
+            updateDiagnosticOverlay(el, {
+              stage: "RESPONSE_RECEIVED",
+              terminal: decision.hide ? "API_SUCCESS_HIDE" : "API_SUCCESS_SHOW",
+              hide: decision.hide,
+              reason: decision.reason,
+              provider: response?.provider || "",
+              model: response?.model || "",
+              error: decision.error || "",
+            });
+          }
 
           // Stale selection protection: verify DOM element has not been recycled for a different post
           if (el && nodeToPostId.get(el) === decision.id) {
@@ -587,6 +634,15 @@ function sendBatchMessage(batch, callback) {
   } catch (err) {
     logger.warn("CONTENT", "extension context disconnected:", err);
     for (const post of batch) {
+      const el = post.el || elementById.get(post.id);
+      if (el) {
+        updateDiagnosticOverlay(el, {
+          stage: "RESPONSE_RECEIVED",
+          terminal: "API_ERROR",
+          error: err.message || "extension context disconnected",
+          domState: "VISIBLE (FAIL-OPEN)",
+        });
+      }
       inFlightPostIds.delete(post.id);
       elementById.delete(post.id);
     }
@@ -658,6 +714,18 @@ export function scan(root) {
 
     logger.trace("QUALIFICATION", `decision=${qual.decision} score=${qual.score} reason=${qual.reason}`);
 
+    updateDiagnosticOverlay(node, {
+      stage: "QUALIFIED",
+      terminal: qual.qualified
+        ? "QUALIFIED"
+        : qual.reason === "composer"
+        ? "REJECTED_COMPOSER"
+        : "REJECTED_NOT_POST",
+      qualified: qual.qualified,
+      score: qual.score,
+      reason: qual.reason,
+    });
+
     if (isDebugEnabled()) {
       const sigs = qual.signals || {};
       logger.debug(
@@ -676,11 +744,22 @@ export function scan(root) {
     // Process ACCEPT and AMBIGUOUS candidates through extractPost
     const post = extractPost(node);
     if (!post) {
+      updateDiagnosticOverlay(node, {
+        stage: "EXTRACTED",
+        terminal: "EXTRACTION_FAILED",
+        error: "extractPost returned null",
+      });
       if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
         logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
       }
       continue;
     }
+
+    updateDiagnosticOverlay(node, {
+      stage: "EXTRACTED",
+      postId: post.id,
+      author: post.author,
+    });
 
     logger.trace("POST_EXTRACTED", `id=${post.id} author="${post.author}"`);
 
@@ -717,6 +796,13 @@ export function scan(root) {
           `[POST] id=${post.id} decision=${cachedDecision.hide ? "HIDE" : "SHOW"} alreadyProcessed=true (cached)`
         );
       }
+      updateDiagnosticOverlay(node, {
+        stage: "DOM_APPLIED",
+        terminal: cachedDecision.hide ? "DOM_HIDDEN" : "DOM_VISIBLE",
+        hide: cachedDecision.hide,
+        reason: cachedDecision.reason,
+        domState: cachedDecision.hide ? "HIDDEN (CACHED)" : "VISIBLE (CACHED)",
+      });
       applyDecision(node, cachedDecision);
       continue;
     }
@@ -729,6 +815,12 @@ export function scan(root) {
           `[POST] id=${post.id} decision=PENDING alreadyProcessed=true (in-flight)`
         );
       }
+      updateDiagnosticOverlay(node, {
+        stage: "QUEUED",
+        terminal: "QUEUED",
+        postId: post.id,
+        author: post.author,
+      });
       // Update element mapping in case node reference changed
       elementById.set(post.id, node);
       continue;
@@ -739,6 +831,13 @@ export function scan(root) {
     if (isDebugEnabled()) {
       logger.debug("CONTENT", `[POST] id=${post.id} decision=UNPROCESSED alreadyProcessed=false`);
     }
+
+    updateDiagnosticOverlay(node, {
+      stage: "QUEUED",
+      terminal: "QUEUED",
+      postId: post.id,
+      author: post.author,
+    });
 
     inFlightPostIds.add(post.id);
     elementById.set(post.id, node);
@@ -1087,6 +1186,8 @@ if (typeof window !== "undefined") {
   window.isLikelyPostContainer = isLikelyPostContainer;
   window.extractPost = extractPost;
   window.scan = scan;
+  window.isDiagnosticModeEnabled = isDiagnosticModeEnabled;
+  window.updateDiagnosticOverlay = updateDiagnosticOverlay;
   window.addEventListener("popstate", () => initFeedObserver(document));
 }
 
