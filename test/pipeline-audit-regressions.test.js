@@ -13,6 +13,8 @@ import {
   extractPost,
   findContainers,
   findFeedRoot,
+  applyDecision,
+  cacheDecision,
 } from "../src/content/content-index.js";
 
 import { isDebugEnabled } from "../src/utils/logger.js";
@@ -284,3 +286,58 @@ test("DOM Contract: matches actual LinkedIn feed hierarchy", () => {
   assert.equal(extracted.author, "The Octocat");
   assert.ok(extracted.text.includes("open source release"));
 });
+
+// ---------------------------------------------------------------------------
+// 5. BATCHING & QUEUE SCALING TESTS
+// ---------------------------------------------------------------------------
+
+test("Batching Scale: 1, 10, 50, 500 genuinely new posts queue exactly N unique identities", () => {
+  for (const count of [1, 10, 50, 500]) {
+    resetContentState();
+    const nodes = [];
+    for (let i = 1; i <= count; i++) {
+      const p = createNode("div", { class: "feed-shared-update-v2", "data-urn": `urn:li:activity:batch_${count}_${i}` });
+      createNode("div", { class: "update-components-text", text: `Post content ${i}` }, p);
+      nodes.push(p);
+      scan(p);
+    }
+    const pendingPosts = getPendingPosts();
+    assert.equal(pendingPosts.length, count, `Expected exactly ${count} posts queued in pending`);
+
+    // Verify 0 duplicate IDs
+    const uniqueIds = new Set(pendingPosts.map((p) => p.id));
+    assert.equal(uniqueIds.size, count, "All queued IDs must be unique");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 6. CACHED DECISION & CONTAINER RECYCLING TESTS
+// ---------------------------------------------------------------------------
+
+test("Cached Decisions: Re-rendering classified post applies cached decision immediately with 0 pending", () => {
+  resetContentState();
+
+  const container = createNode("div", { class: "feed-shared-update-v2", "data-urn": "urn:li:activity:cached_1" });
+  createNode("div", { class: "update-components-text", text: "Cached post content" }, container);
+
+  // First scan queues post
+  scan(container);
+  assert.equal(getPendingPosts().length, 1);
+
+  // Simulate classification decision applied
+  applyDecision(container, { id: "urn:li:activity:cached_1", hide: true, reason: "Spam" });
+  assert.equal(container.classList.contains("feedrule-hidden"), true);
+
+  resetContentState();
+  // Store decision in cache
+  cacheDecision("urn:li:activity:cached_1", { id: "urn:li:activity:cached_1", hide: true, reason: "Spam" });
+
+  const newDomNode = createNode("div", { class: "feed-shared-update-v2", "data-urn": "urn:li:activity:cached_1" });
+  createNode("div", { class: "update-components-text", text: "Cached post content" }, newDomNode);
+
+  scan(newDomNode);
+  // Decision should apply immediately from cache without entering pending
+  assert.equal(getPendingPosts().length, 0, "Cached post must not enter pending queue");
+  assert.equal(newDomNode.classList.contains("feedrule-hidden"), true, "Cached hidden decision must be applied to new DOM node");
+});
+

@@ -1257,6 +1257,12 @@
               applyDecision(el, decision);
             }
           }
+  
+          // Defensive invariant: ensure every item in the batch is released even if response was truncated
+          for (const post of batch) {
+            inFlightPostIds.delete(post.id);
+            elementById.delete(post.id);
+          }
           callback();
         }
       );
