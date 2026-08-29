@@ -152,6 +152,24 @@ export function isLikelyPostContainer(el) {
     };
   }
 
+  // 5. Feed controls ("Sort by", "New posts", "Load more" pills/buttons)
+  const textRaw = (el.innerText || el.textContent || "").trim().toLowerCase();
+  if (
+    textRaw.startsWith("sort by:") ||
+    textRaw === "sort by" ||
+    textRaw === "new posts" ||
+    textRaw === "load more" ||
+    textRaw === "show more results"
+  ) {
+    return {
+      qualified: false,
+      decision: "REJECT",
+      score: 0,
+      signals: { controls: true },
+      reason: "feed-control-ui",
+    };
+  }
+
   // =========================================================================
   // STAGE 2: WEIGHTED POSITIVE EVIDENCE SCORING
   // =========================================================================
@@ -197,6 +215,10 @@ export function isLikelyPostContainer(el) {
     el.querySelector?.("a[href*='/in/'], a[href*='/company/'], a[href*='/school/'], a[href*='/showcase/']")
   );
 
+  const hasLazyMount = Boolean(
+    el.getAttribute?.("data-lazy-mount-id") || el.querySelector?.("[data-lazy-mount-id]")
+  );
+
   const hasSocialActions = Boolean(
     el.querySelector?.(".feed-shared-social-actions, .feed-shared-social-action-bar, button[aria-label*='React Like'], button[aria-label*='Comment']")
   );
@@ -208,6 +230,7 @@ export function isLikelyPostContainer(el) {
   if (hasUpdateClass) score += 25;
   if (hasActorStructure) score += 25;
   if (hasPostTextStructure) score += 25;
+  if (hasLazyMount) score += 25;
   if (hasTimestamp) score += 20;
   if (hasControlMenu) score += 20;
   if (hasAuthorLink) score += 15;
@@ -218,6 +241,7 @@ export function isLikelyPostContainer(el) {
     permalink: hasPostPermalink,
     updateClass: hasUpdateClass,
     actor: hasActorStructure,
+    lazyMount: hasLazyMount,
     text: hasPostTextStructure,
     timestamp: hasTimestamp,
     controlMenu: hasControlMenu,

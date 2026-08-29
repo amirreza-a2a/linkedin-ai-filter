@@ -13,12 +13,15 @@ const HIDDEN_CLASS = "feedrule-hidden";
 
 const COMBINED_CONTAINER_SELECTOR = [
   "div.feed-shared-update-v2",
+  "div.occludable-update",
+  "div[data-lazy-mount-id]",
   "div[data-urn*='activity:']",
   "div[data-urn*='ugcPost:']",
   "div[data-urn*='sponsoredUpdate:']",
   "div[data-id*='activity:']",
   'div[data-testid="mainFeed"] div[role="listitem"]',
   'div[role="listitem"]',
+  'div[role="list"] > div',
 ].join(", ");
 
 const NON_FEED_ANCESTOR_SELECTOR = [
@@ -38,6 +41,8 @@ const FEED_ROOT_SELECTORS = [
   "div[data-testid='mainFeed']",
   ".scaffold-finite-scroll",
   ".scaffold-finite-scroll__content",
+  "main#workspace",
+  "div[role='list']",
   "div.core-rail",
   "main[role='main']",
 ];
@@ -272,8 +277,11 @@ export function extractPost(el) {
   let id =
     el.getAttribute?.("data-urn") ||
     el.getAttribute?.("data-id") ||
+    el.getAttribute?.("data-chameleon-urn") ||
+    el.getAttribute?.("data-lazy-mount-id") ||
     el.querySelector?.("[data-urn*='activity:']")?.getAttribute?.("data-urn") ||
     el.querySelector?.("[data-urn*='ugcPost:']")?.getAttribute?.("data-urn") ||
+    el.querySelector?.("[data-lazy-mount-id]")?.getAttribute?.("data-lazy-mount-id") ||
     "";
 
   // Level 2: Extract verified URN from permalink if available
@@ -332,9 +340,12 @@ export function findContainers(root) {
     if (uniqueNodes.has(node)) continue;
     uniqueNodes.add(node);
 
-    // If this is a generic listitem that wraps an inner .feed-shared-update-v2, prefer the inner container
-    if (node.getAttribute?.("role") === "listitem" && !node.classList?.contains?.("feed-shared-update-v2")) {
-      const innerUpdate = node.querySelector?.(".feed-shared-update-v2, [data-urn*='activity:']");
+    // If this is a generic outer container that wraps an inner canonical update, prefer the inner container
+    if (
+      (node.getAttribute?.("role") === "listitem" || !node.classList?.contains?.("feed-shared-update-v2")) &&
+      !node.getAttribute?.("data-lazy-mount-id")
+    ) {
+      const innerUpdate = node.querySelector?.("div[data-lazy-mount-id], .feed-shared-update-v2, [data-urn*='activity:']");
       if (innerUpdate) {
         if (!uniqueNodes.has(innerUpdate)) {
           uniqueNodes.add(innerUpdate);
@@ -347,8 +358,18 @@ export function findContainers(root) {
     canonicalNodes.push(node);
   }
 
-  logger.trace("CONTAINERS_FOUND", `count=${canonicalNodes.length}`);
-  return canonicalNodes;
+  // Discard redundant inner descendants when an outer canonical post container is already selected
+  const filteredNodes = [];
+  for (const node of canonicalNodes) {
+    const parentContainer = node.parentElement?.closest?.("div[data-lazy-mount-id], div.feed-shared-update-v2");
+    if (parentContainer && uniqueNodes.has(parentContainer)) {
+      continue;
+    }
+    filteredNodes.push(node);
+  }
+
+  logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
+  return filteredNodes;
 }
 
 // --- DOM filtering & Bounded Caches ----------------------------------
@@ -1056,6 +1077,10 @@ export function initFeedObserver(doc = typeof document !== "undefined" ? documen
 if (typeof window !== "undefined") {
   window.__dumpFeedRuleState = () => console.log(dumpFeedRuleRuntimeState());
   window.__getFeedRuleState = dumpFeedRuleRuntimeState;
+  window.findContainers = findContainers;
+  window.isLikelyPostContainer = isLikelyPostContainer;
+  window.extractPost = extractPost;
+  window.scan = scan;
   window.addEventListener("popstate", () => initFeedObserver(document));
 }
 

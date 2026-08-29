@@ -226,6 +226,24 @@
       };
     }
   
+    // 5. Feed controls ("Sort by", "New posts", "Load more" pills/buttons)
+    const textRaw = (el.innerText || el.textContent || "").trim().toLowerCase();
+    if (
+      textRaw.startsWith("sort by:") ||
+      textRaw === "sort by" ||
+      textRaw === "new posts" ||
+      textRaw === "load more" ||
+      textRaw === "show more results"
+    ) {
+      return {
+        qualified: false,
+        decision: "REJECT",
+        score: 0,
+        signals: { controls: true },
+        reason: "feed-control-ui",
+      };
+    }
+  
     // =========================================================================
     // STAGE 2: WEIGHTED POSITIVE EVIDENCE SCORING
     // =========================================================================
@@ -271,6 +289,10 @@
       el.querySelector?.("a[href*='/in/'], a[href*='/company/'], a[href*='/school/'], a[href*='/showcase/']")
     );
   
+    const hasLazyMount = Boolean(
+      el.getAttribute?.("data-lazy-mount-id") || el.querySelector?.("[data-lazy-mount-id]")
+    );
+  
     const hasSocialActions = Boolean(
       el.querySelector?.(".feed-shared-social-actions, .feed-shared-social-action-bar, button[aria-label*='React Like'], button[aria-label*='Comment']")
     );
@@ -282,6 +304,7 @@
     if (hasUpdateClass) score += 25;
     if (hasActorStructure) score += 25;
     if (hasPostTextStructure) score += 25;
+    if (hasLazyMount) score += 25;
     if (hasTimestamp) score += 20;
     if (hasControlMenu) score += 20;
     if (hasAuthorLink) score += 15;
@@ -292,6 +315,7 @@
       permalink: hasPostPermalink,
       updateClass: hasUpdateClass,
       actor: hasActorStructure,
+      lazyMount: hasLazyMount,
       text: hasPostTextStructure,
       timestamp: hasTimestamp,
       controlMenu: hasControlMenu,
@@ -717,12 +741,15 @@
   
   const COMBINED_CONTAINER_SELECTOR = [
     "div.feed-shared-update-v2",
+    "div.occludable-update",
+    "div[data-lazy-mount-id]",
     "div[data-urn*='activity:']",
     "div[data-urn*='ugcPost:']",
     "div[data-urn*='sponsoredUpdate:']",
     "div[data-id*='activity:']",
     'div[data-testid="mainFeed"] div[role="listitem"]',
     'div[role="listitem"]',
+    'div[role="list"] > div',
   ].join(", ");
   
   const NON_FEED_ANCESTOR_SELECTOR = [
@@ -742,6 +769,8 @@
     "div[data-testid='mainFeed']",
     ".scaffold-finite-scroll",
     ".scaffold-finite-scroll__content",
+    "main#workspace",
+    "div[role='list']",
     "div.core-rail",
     "main[role='main']",
   ];
@@ -976,8 +1005,11 @@
     let id =
       el.getAttribute?.("data-urn") ||
       el.getAttribute?.("data-id") ||
+      el.getAttribute?.("data-chameleon-urn") ||
+      el.getAttribute?.("data-lazy-mount-id") ||
       el.querySelector?.("[data-urn*='activity:']")?.getAttribute?.("data-urn") ||
       el.querySelector?.("[data-urn*='ugcPost:']")?.getAttribute?.("data-urn") ||
+      el.querySelector?.("[data-lazy-mount-id]")?.getAttribute?.("data-lazy-mount-id") ||
       "";
   
     // Level 2: Extract verified URN from permalink if available
@@ -1036,9 +1068,12 @@
       if (uniqueNodes.has(node)) continue;
       uniqueNodes.add(node);
   
-      // If this is a generic listitem that wraps an inner .feed-shared-update-v2, prefer the inner container
-      if (node.getAttribute?.("role") === "listitem" && !node.classList?.contains?.("feed-shared-update-v2")) {
-        const innerUpdate = node.querySelector?.(".feed-shared-update-v2, [data-urn*='activity:']");
+      // If this is a generic outer container that wraps an inner canonical update, prefer the inner container
+      if (
+        (node.getAttribute?.("role") === "listitem" || !node.classList?.contains?.("feed-shared-update-v2")) &&
+        !node.getAttribute?.("data-lazy-mount-id")
+      ) {
+        const innerUpdate = node.querySelector?.("div[data-lazy-mount-id], .feed-shared-update-v2, [data-urn*='activity:']");
         if (innerUpdate) {
           if (!uniqueNodes.has(innerUpdate)) {
             uniqueNodes.add(innerUpdate);
@@ -1051,8 +1086,18 @@
       canonicalNodes.push(node);
     }
   
-    logger.trace("CONTAINERS_FOUND", `count=${canonicalNodes.length}`);
-    return canonicalNodes;
+    // Discard redundant inner descendants when an outer canonical post container is already selected
+    const filteredNodes = [];
+    for (const node of canonicalNodes) {
+      const parentContainer = node.parentElement?.closest?.("div[data-lazy-mount-id], div.feed-shared-update-v2");
+      if (parentContainer && uniqueNodes.has(parentContainer)) {
+        continue;
+      }
+      filteredNodes.push(node);
+    }
+  
+    logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
+    return filteredNodes;
   }
   
   // --- DOM filtering & Bounded Caches ----------------------------------
@@ -1760,6 +1805,10 @@
   if (typeof window !== "undefined") {
     window.__dumpFeedRuleState = () => console.log(dumpFeedRuleRuntimeState());
     window.__getFeedRuleState = dumpFeedRuleRuntimeState;
+    window.findContainers = findContainers;
+    window.isLikelyPostContainer = isLikelyPostContainer;
+    window.extractPost = extractPost;
+    window.scan = scan;
     window.addEventListener("popstate", () => initFeedObserver(document));
   }
   
