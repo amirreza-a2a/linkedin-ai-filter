@@ -14,36 +14,36 @@ import { escapeXml } from "../dashboard/charts.js";
 import { openExtensionPage } from "../navigation/navigation.js";
 
 // DOM Elements
-const canvas = document.getElementById("graph-canvas");
-const topicFilterSelect = document.getElementById("topic-filter");
-const authorFilterSelect = document.getElementById("author-filter");
-const nodeTypeSelect = document.getElementById("node-type-filter");
-const searchInput = document.getElementById("search-input");
-const clearFiltersBtn = document.getElementById("clear-filters-btn");
-const fitGraphBtn = document.getElementById("fit-graph-btn");
-const resetViewBtn = document.getElementById("reset-view-btn");
-const focusBanner = document.getElementById("focus-banner");
-const focusLabel = document.getElementById("focus-label");
-const exitFocusBtn = document.getElementById("exit-focus-btn");
-const emptyState = document.getElementById("graph-empty-state");
-const emptyStateDesc = document.getElementById("empty-state-desc");
+const canvas = document.getElementById("graphCanvas");
+const topicFilterSelect = document.getElementById("topicFilterSelect");
+const authorFilterSelect = document.getElementById("authorFilterSelect");
+const nodeTypeSelect = document.getElementById("nodeTypeSelect");
+const searchInput = document.getElementById("searchGraph");
+const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+const fitGraphBtn = document.getElementById("fitGraphBtn");
+const resetViewBtn = document.getElementById("resetViewBtn");
+const focusBanner = document.getElementById("focusBanner");
+const focusLabel = document.getElementById("focusLabel");
+const exitFocusBtn = document.getElementById("exitFocusBtn");
+const emptyState = document.getElementById("emptyState");
+const emptyStateDesc = document.getElementById("emptyStateDesc");
 
 // Sidebar & Detail Card
-const sidebar = document.getElementById("graph-sidebar");
-const toggleSidebarBtn = document.getElementById("toggle-sidebar-btn");
-const nodeDetailsContent = document.getElementById("node-details-content");
+const sidebar = document.getElementById("sidebar");
+const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+const nodeDetailsContent = document.getElementById("nodeDetailsContent");
 
 // Physics Controls Elements
-const togglePhysicsBtn = document.getElementById("toggle-physics-btn");
-const physicsPanel = document.getElementById("physics-panel");
-const densitySlider = document.getElementById("density-slider");
-const spacingSlider = document.getElementById("spacing-slider");
-const gravitySlider = document.getElementById("gravity-slider");
-const resetPhysicsBtn = document.getElementById("reset-physics-btn");
+const togglePhysicsBtn = document.getElementById("togglePhysicsBtn");
+const physicsPanel = document.getElementById("physicsPanel");
+const densitySlider = document.getElementById("densitySlider");
+const spacingSlider = document.getElementById("spacingSlider");
+const gravitySlider = document.getElementById("gravitySlider");
+const resetPhysicsBtn = document.getElementById("resetPhysicsBtn");
 
 // Navigation Links
-const openBrainBtn = document.getElementById("open-brain-btn");
-const openDashboardBtn = document.getElementById("open-dashboard-btn");
+const openBrainBtn = document.getElementById("openBrainBtn");
+const openDashboardBtn = document.getElementById("openDashboardBtn");
 
 // Application State
 let allSavedPosts = [];
@@ -281,6 +281,12 @@ function updateGraph() {
   const isUnchanged = areGraphsEqual(activeGraph, graph);
   activeGraph = graph;
 
+  console.log("[FeedRule][GRAPH] graph state:", {
+    nodes: activeGraph.nodes.length,
+    edges: activeGraph.edges.length,
+    isUnchanged,
+  });
+
   if (activeGraph.nodes.length === 0) {
     emptyState.style.display = "flex";
     emptyStateDesc.textContent = focusedNodeId || selTopic || selAuthor || searchQuery || selNodeType !== "all"
@@ -328,6 +334,7 @@ function clearFilters() {
 
 async function init() {
   allSavedPosts = await getSavedPosts();
+  console.log("[FeedRule][GRAPH] loaded saved posts count:", allSavedPosts.length);
 
   updateFilterDropdowns(allSavedPosts);
 

@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   buildKnowledgeGraph,
   filterGraphByNodeType,
@@ -365,4 +367,98 @@ test("ForceLayout - deterministic circular initialization and physics convergenc
 
   assert.ok(done);
   assert.ok(layout.alpha < layout.alphaMin);
+});
+
+test("DOM Contract: All element IDs required by graph.js exist in graph.html", () => {
+  const htmlPath = path.resolve("src/graph/graph.html");
+  const htmlContent = fs.readFileSync(htmlPath, "utf-8");
+
+  const requiredElementIds = [
+    "graphCanvas",
+    "topicFilterSelect",
+    "authorFilterSelect",
+    "nodeTypeSelect",
+    "searchGraph",
+    "clearFiltersBtn",
+    "fitGraphBtn",
+    "resetViewBtn",
+    "focusBanner",
+    "focusLabel",
+    "exitFocusBtn",
+    "emptyState",
+    "emptyStateDesc",
+    "sidebar",
+    "toggleSidebarBtn",
+    "nodeDetailsContent",
+    "togglePhysicsBtn",
+    "physicsPanel",
+    "densitySlider",
+    "spacingSlider",
+    "gravitySlider",
+    "resetPhysicsBtn",
+    "openBrainBtn",
+    "openDashboardBtn",
+  ];
+
+  for (const id of requiredElementIds) {
+    const idRegex = new RegExp(`id=["']${id}["']`);
+    assert.ok(
+      idRegex.test(htmlContent),
+      `Element id='${id}' required by graph.js must exist in src/graph/graph.html`
+    );
+  }
+});
+
+test("Data Pipeline: Non-empty saved posts produce non-empty graph and default filters preserve all nodes", () => {
+  const mockSavedPosts = [
+    {
+      id: "post:1",
+      text: "Machine learning systems and neural network pipelines.",
+      author: "Alice Engineer",
+      authorUrl: "https://linkedin.com/in/alice",
+      topics: ["Machine Learning", "Systems"],
+    },
+    {
+      id: "post:2",
+      text: "Distributed consensus algorithms and storage engines.",
+      author: "Bob Architect",
+      authorUrl: "https://linkedin.com/in/bob",
+      topics: ["Systems", "Distributed"],
+    },
+  ];
+
+  // 1. Build base graph
+  const baseGraph = buildKnowledgeGraph(mockSavedPosts);
+  assert.equal(baseGraph.nodes.length, 7); // 2 posts + 3 topics (ML, Systems, Distributed) + 2 authors (Alice, Bob)
+  assert.equal(baseGraph.edges.length, 6); // 4 has-topic edges + 2 written-by edges
+
+  // 2. Default filters (all topics, all authors, all types, empty search)
+  const selTopic = "";
+  const selAuthor = "";
+  const selNodeType = "all";
+  const searchQuery = "";
+
+  const filteredPosts = mockSavedPosts.filter((p) => {
+    if (selTopic && !(p.topics || []).some((t) => t.toLowerCase() === selTopic.toLowerCase())) return false;
+    if (selAuthor && (p.author || "").toLowerCase() !== selAuthor.toLowerCase()) return false;
+    if (searchQuery && !(p.text || "").toLowerCase().includes(searchQuery)) return false;
+    return true;
+  });
+
+  // Verify filteredPosts is identical in length and content
+  assert.equal(filteredPosts.length, mockSavedPosts.length);
+
+  let activeGraph = buildKnowledgeGraph(filteredPosts);
+  if (selNodeType !== "all") {
+    activeGraph = filterGraphByNodeType(activeGraph, selNodeType);
+  }
+
+  // Verify activeGraph matches baseGraph completely
+  assert.equal(activeGraph.nodes.length, baseGraph.nodes.length);
+  assert.equal(activeGraph.edges.length, baseGraph.edges.length);
+
+  // Invariant: mockSavedPosts array and post objects were never mutated
+  assert.equal(mockSavedPosts.length, 2);
+  assert.equal(mockSavedPosts[0].topics.length, 2);
+  assert.equal(mockSavedPosts[1].topics.length, 2);
 });
