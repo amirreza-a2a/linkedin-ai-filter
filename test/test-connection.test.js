@@ -490,3 +490,86 @@ test("Persistence Invariant: Testing connection never mutates storage", async ()
     globalThis.document = originalDocument;
   }
 });
+
+// --- 8. Contract Invariants & Security Masking Tests ---
+test("Security Invariant: normalizeTestError masks raw secrets and Bearer tokens in error messages", () => {
+  const leakedResponse = JSON.stringify({
+    error: {
+      message: "Failed authenticating sk-1234567890abcdef with Bearer eyJhbGciOiJIUzI1Ni... and key sk-ant-9876543210zyx and AIzaSyD987654321",
+    },
+  });
+
+  const normalized = normalizeTestError(401, leakedResponse);
+  assert.equal(normalized.errorCode, "INVALID_API_KEY");
+  assert.equal(normalized.message, "Invalid API key");
+
+  const normalized400 = normalizeTestError(400, leakedResponse);
+  assert.equal(normalized400.errorCode, "INVALID_REQUEST");
+  assert.ok(!normalized400.message.includes("sk-1234567890abcdef"));
+  assert.ok(!normalized400.message.includes("sk-ant-9876543210zyx"));
+  assert.ok(!normalized400.message.includes("AIzaSyD987654321"));
+  assert.ok(normalized400.message.includes("sk-***"));
+  assert.ok(normalized400.message.includes("sk-ant-***"));
+  assert.ok(normalized400.message.includes("AIza***"));
+});
+
+test("Contract Invariant: 409 Conflict status is mapped cleanly to CONFLICT error code", () => {
+  const err409 = normalizeTestError(409, JSON.stringify({ error: { message: "Model resource locked" } }));
+  assert.equal(err409.errorCode, "CONFLICT");
+  assert.ok(err409.message.includes("Conflict"));
+});
+
+test("Contract Invariant: Host permission requests only trigger for custom Base URLs, never built-in endpoints", async () => {
+  let containsCalled = false;
+  let requestCalled = false;
+
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.chrome = {
+    permissions: {
+      contains: async () => {
+        containsCalled = true;
+        return true;
+      },
+      request: async () => {
+        requestCalled = true;
+        return true;
+      },
+    },
+  };
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ choices: [{ message: { content: "pong" } }] }),
+  });
+
+  try {
+    // 1. Built-in OpenAI endpoint (empty baseUrl) -> must NOT query chrome.permissions
+    containsCalled = false;
+    requestCalled = false;
+    await testProviderConnection({
+      provider: "openai",
+      apiKey: "sk-test",
+      model: "gpt-4o-mini",
+      baseUrl: "",
+    });
+    assert.equal(containsCalled, false, "Default endpoint must not check permissions");
+    assert.equal(requestCalled, false, "Default endpoint must not request permissions");
+
+    // 2. Custom Base URL -> must check permissions
+    containsCalled = false;
+    requestCalled = false;
+    await testProviderConnection({
+      provider: "openai",
+      apiKey: "sk-test",
+      model: "gpt-4o-mini",
+      baseUrl: "https://my-custom-proxy.internal.corp/v1",
+    });
+    assert.equal(containsCalled, true, "Custom Base URL must check permissions");
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});

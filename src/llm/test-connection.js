@@ -14,6 +14,23 @@ const DEFAULT_MODELS = {
 const DEFAULT_TIMEOUT_MS = 10000;
 
 /**
+ * Sanitizes any sensitive credential tokens, Bearer strings, or API key patterns from error messages.
+ *
+ * @param {string} msg
+ * @returns {string}
+ */
+export function sanitizeErrorMessage(msg) {
+  if (typeof msg !== "string") return "";
+  return msg
+    .replace(/sk-ant-[a-zA-Z0-9_\-]{8,}/gi, "sk-ant-***")
+    .replace(/sk-[a-zA-Z0-9_\-]{8,}/gi, "sk-***")
+    .replace(/AIza[a-zA-Z0-9_\-]{8,}/gi, "AIza***")
+    .replace(/Bearer\s+[a-zA-Z0-9._\-]+/gi, "Bearer ***")
+    .replace(/x-api-key:\s*[^\s,]+/gi, "x-api-key: ***")
+    .replace(/x-goog-api-key:\s*[^\s,]+/gi, "x-goog-api-key: ***");
+}
+
+/**
  * Normalizes HTTP status codes and response bodies into human-friendly error codes and messages.
  *
  * @param {number} status
@@ -35,6 +52,8 @@ export function normalizeTestError(status, errText = "") {
     }
   }
 
+  parsedMsg = sanitizeErrorMessage(parsedMsg);
+
   if (status === 400) {
     errorCode = "INVALID_REQUEST";
     message = parsedMsg ? `Invalid request: ${parsedMsg}` : "Invalid request or unsupported model/parameter";
@@ -47,6 +66,9 @@ export function normalizeTestError(status, errText = "") {
   } else if (status === 404) {
     errorCode = "NOT_FOUND";
     message = "Model or endpoint not found (check model name or Base URL)";
+  } else if (status === 409) {
+    errorCode = "CONFLICT";
+    message = parsedMsg ? `Conflict: ${parsedMsg}` : "Resource conflict with provider";
   } else if (status === 429) {
     errorCode = "RATE_LIMITED";
     message = parsedMsg && parsedMsg.toLowerCase().includes("quota")
@@ -63,7 +85,7 @@ export function normalizeTestError(status, errText = "") {
     message = "Unable to reach provider endpoint";
   }
 
-  return { errorCode, message };
+  return { errorCode, message: sanitizeErrorMessage(message) };
 }
 
 /**
