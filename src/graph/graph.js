@@ -7,7 +7,7 @@ import {
   extractNeighborhood,
   areGraphsEqual,
 } from "./graph-builder.js";
-import { ForceLayout, PHYSICS_PRESETS } from "./force-layout.js";
+import { ForceLayout, PHYSICS_PRESETS, PHYSICS_RANGES } from "./force-layout.js";
 import { GraphRenderer } from "./graph-renderer.js";
 import { getSavedPosts } from "../storage/saved-posts-store.js";
 import { escapeXml } from "../dashboard/charts.js";
@@ -387,6 +387,22 @@ resetViewBtn.addEventListener("click", () => {
 });
 
 // Physics Controls
+// Initialize slider ranges from canonical physics configuration
+densitySlider.min = String(PHYSICS_RANGES.repulsion.min);
+densitySlider.max = String(PHYSICS_RANGES.repulsion.max);
+densitySlider.step = String(PHYSICS_RANGES.repulsion.step);
+densitySlider.value = String(PHYSICS_RANGES.repulsion.default);
+
+spacingSlider.min = String(PHYSICS_RANGES.springLength.min);
+spacingSlider.max = String(PHYSICS_RANGES.springLength.max);
+spacingSlider.step = String(PHYSICS_RANGES.springLength.step);
+spacingSlider.value = String(PHYSICS_RANGES.springLength.default);
+
+gravitySlider.min = String(PHYSICS_RANGES.gravity.sliderMin);
+gravitySlider.max = String(PHYSICS_RANGES.gravity.sliderMax);
+gravitySlider.step = String(PHYSICS_RANGES.gravity.sliderStep);
+gravitySlider.value = String(PHYSICS_RANGES.gravity.sliderDefault);
+
 togglePhysicsBtn.addEventListener("click", () => {
   physicsPanel.classList.toggle("open");
 });
@@ -408,7 +424,7 @@ spacingSlider.addEventListener("input", () => {
 });
 
 gravitySlider.addEventListener("input", () => {
-  layout.setPhysics({ gravity: parseInt(gravitySlider.value, 10) / 1000 });
+  layout.setPhysics({ gravity: parseInt(gravitySlider.value, 10) / PHYSICS_RANGES.gravity.sliderScale });
   clearActivePresetButtons();
   if (renderer) renderer.requestRender();
 });

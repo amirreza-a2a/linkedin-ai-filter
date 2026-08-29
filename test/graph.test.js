@@ -10,6 +10,7 @@ import {
 import {
   ForceLayout,
   PHYSICS_PRESETS,
+  PHYSICS_RANGES,
   computeEffectivePhysics,
   getNodeCollisionRadius,
 } from "../src/graph/force-layout.js";
@@ -622,5 +623,131 @@ test("ForceLayout - determinism invariant (identical inputs produce identical si
     assert.equal(n1.y, n2.y);
     assert.equal(n1.vx, n2.vx);
     assert.equal(n1.vy, n2.vy);
+  }
+});
+
+// =========================================================================
+// EXPANDED USER-CONTROL PHYSICS RANGES TESTS
+// =========================================================================
+
+test("PHYSICS_RANGES - canonical configuration defines valid min, max, default, and step for all controls", () => {
+  const params = ["repulsion", "springLength", "gravity"];
+
+  for (const p of params) {
+    const config = PHYSICS_RANGES[p];
+    assert.ok(config, `PHYSICS_RANGES must define config for ${p}`);
+    assert.ok(typeof config.min === "number" && !isNaN(config.min), `${p}.min must be a number`);
+    assert.ok(typeof config.max === "number" && !isNaN(config.max), `${p}.max must be a number`);
+    assert.ok(typeof config.default === "number" && !isNaN(config.default), `${p}.default must be a number`);
+    assert.ok(typeof config.step === "number" && !isNaN(config.step), `${p}.step must be a number`);
+
+    // Invariants
+    assert.ok(config.min < config.max, `${p}.min (${config.min}) must be strictly less than ${p}.max (${config.max})`);
+    assert.ok(
+      config.default >= config.min && config.default <= config.max,
+      `${p}.default (${config.default}) must be within [${config.min}, ${config.max}]`
+    );
+  }
+
+  // Expanded ceiling invariants
+  assert.ok(PHYSICS_RANGES.repulsion.max >= 6000, "Repulsion max must be expanded to at least 6000");
+  assert.ok(PHYSICS_RANGES.springLength.max >= 300, "SpringLength max must be expanded to at least 300");
+
+  // Presets must be within the canonical ranges
+  for (const [presetName, preset] of Object.entries(PHYSICS_PRESETS)) {
+    assert.ok(
+      preset.repulsion >= PHYSICS_RANGES.repulsion.min && preset.repulsion <= PHYSICS_RANGES.repulsion.max,
+      `Preset ${presetName} repulsion must be within canonical range`
+    );
+    assert.ok(
+      preset.springLength >= PHYSICS_RANGES.springLength.min && preset.springLength <= PHYSICS_RANGES.springLength.max,
+      `Preset ${presetName} springLength must be within canonical range`
+    );
+    assert.ok(
+      preset.gravity >= PHYSICS_RANGES.gravity.min && preset.gravity <= PHYSICS_RANGES.gravity.max,
+      `Preset ${presetName} gravity must be within canonical range`
+    );
+  }
+
+  // Spread preset is within range but no longer the upper ceiling
+  assert.ok(
+    PHYSICS_PRESETS.spread.repulsion < PHYSICS_RANGES.repulsion.max,
+    "Spread preset repulsion must be less than the maximum slider ceiling"
+  );
+  assert.ok(
+    PHYSICS_PRESETS.spread.springLength < PHYSICS_RANGES.springLength.max,
+    "Spread preset springLength must be less than the maximum slider ceiling"
+  );
+});
+
+test("Expanded Physics Ranges - maximum slider values produce substantially larger effective values than defaults", () => {
+  const n = 150;
+  const e = 300;
+
+  const defaultEff = computeEffectivePhysics({
+    nodeCount: n,
+    edgeCount: e,
+    repulsion: PHYSICS_RANGES.repulsion.default,
+    springLength: PHYSICS_RANGES.springLength.default,
+    gravity: PHYSICS_RANGES.gravity.default,
+  });
+
+  const maxEff = computeEffectivePhysics({
+    nodeCount: n,
+    edgeCount: e,
+    repulsion: PHYSICS_RANGES.repulsion.max,
+    springLength: PHYSICS_RANGES.springLength.max,
+    gravity: PHYSICS_RANGES.gravity.max,
+  });
+
+  // Effective repulsion at max must be > 3x the default
+  assert.ok(
+    maxEff.effectiveRepulsion >= defaultEff.effectiveRepulsion * 3,
+    `Max effective repulsion (${maxEff.effectiveRepulsion}) should be >= 3x default (${defaultEff.effectiveRepulsion})`
+  );
+
+  // Effective spring length at max must be > 3x the default
+  assert.ok(
+    maxEff.effectiveSpringLength >= defaultEff.effectiveSpringLength * 3,
+    `Max effective spring length (${maxEff.effectiveSpringLength}) should be >= 3x default (${defaultEff.effectiveSpringLength})`
+  );
+});
+
+test("ForceLayout - large graph remains numerically stable at maximum expanded physics settings", () => {
+  const mockPosts = Array.from({ length: 150 }, (_, i) => ({
+    id: `post-${i}`,
+    text: `Architectural post ${i} on distributed storage`,
+    author: `Author ${i % 25}`,
+    topics: [`Topic-${i % 15}`, `Topic-${(i + 1) % 15}`],
+  }));
+
+  const graph = buildKnowledgeGraph(mockPosts);
+  const layout = new ForceLayout();
+  layout.init(graph.nodes, graph.edges, 1400, 1000);
+
+  // Apply maximum expanded settings
+  layout.setPhysics({
+    repulsion: PHYSICS_RANGES.repulsion.max,
+    springLength: PHYSICS_RANGES.springLength.max,
+    gravity: PHYSICS_RANGES.gravity.min,
+  });
+
+  // Run 60 simulation ticks
+  for (let i = 0; i < 60; i++) {
+    layout.tick();
+  }
+
+  // Assert all coordinates and velocities remain finite and non-NaN
+  for (const node of layout.nodes) {
+    assert.ok(!isNaN(node.x), `Node ${node.id} has NaN x`);
+    assert.ok(!isNaN(node.y), `Node ${node.id} has NaN y`);
+    assert.ok(!isNaN(node.vx), `Node ${node.id} has NaN vx`);
+    assert.ok(!isNaN(node.vy), `Node ${node.id} has NaN vy`);
+    assert.ok(isFinite(node.x), `Node ${node.id} has infinite x`);
+    assert.ok(isFinite(node.y), `Node ${node.id} has infinite y`);
+
+    // Clamped coordinates: does not explode to infinity
+    assert.ok(node.x > -5000 && node.x < 6500, `Node ${node.id} x out of bounds: ${node.x}`);
+    assert.ok(node.y > -5000 && node.y < 6000, `Node ${node.id} y out of bounds: ${node.y}`);
   }
 });

@@ -8,6 +8,32 @@ export const PHYSICS_PRESETS = {
   spread: { repulsion: 2000, springLength: 130, gravity: 0.01 },
 };
 
+export const PHYSICS_RANGES = {
+  repulsion: {
+    min: 200,
+    max: 8000,
+    default: PHYSICS_PRESETS.balanced.repulsion,
+    step: 50,
+  },
+  springLength: {
+    min: 20,
+    max: 400,
+    default: PHYSICS_PRESETS.balanced.springLength,
+    step: 5,
+  },
+  gravity: {
+    min: 0.001,
+    max: 0.100,
+    default: PHYSICS_PRESETS.balanced.gravity,
+    step: 0.001,
+    sliderScale: 1000,
+    sliderMin: 1,
+    sliderMax: 100,
+    sliderDefault: 25,
+    sliderStep: 1,
+  },
+};
+
 /**
  * Computes deterministic, scale-adapted simulation parameters from base user settings
  * and active graph geometry.
@@ -84,10 +110,10 @@ export function getNodeCollisionRadius(node) {
 
 export class ForceLayout {
   constructor(options = {}) {
-    this.repulsion = options.repulsion ?? PHYSICS_PRESETS.balanced.repulsion;
-    this.springLength = options.springLength ?? PHYSICS_PRESETS.balanced.springLength;
+    this.repulsion = options.repulsion ?? PHYSICS_RANGES.repulsion.default;
+    this.springLength = options.springLength ?? PHYSICS_RANGES.springLength.default;
     this.springStrength = options.springStrength ?? 0.06;
-    this.gravity = options.gravity ?? PHYSICS_PRESETS.balanced.gravity;
+    this.gravity = options.gravity ?? PHYSICS_RANGES.gravity.default;
     this.damping = options.damping ?? 0.85;
     this.alphaDecay = options.alphaDecay ?? 0.97;
     this.alphaMin = 0.005;
@@ -109,9 +135,15 @@ export class ForceLayout {
    * @param {number} [params.gravity]
    */
   setPhysics({ repulsion, springLength, gravity } = {}) {
-    if (typeof repulsion === "number" && !isNaN(repulsion)) this.repulsion = repulsion;
-    if (typeof springLength === "number" && !isNaN(springLength)) this.springLength = springLength;
-    if (typeof gravity === "number" && !isNaN(gravity)) this.gravity = gravity;
+    if (typeof repulsion === "number" && !isNaN(repulsion)) {
+      this.repulsion = Math.max(PHYSICS_RANGES.repulsion.min, Math.min(PHYSICS_RANGES.repulsion.max, repulsion));
+    }
+    if (typeof springLength === "number" && !isNaN(springLength)) {
+      this.springLength = Math.max(PHYSICS_RANGES.springLength.min, Math.min(PHYSICS_RANGES.springLength.max, springLength));
+    }
+    if (typeof gravity === "number" && !isNaN(gravity)) {
+      this.gravity = Math.max(PHYSICS_RANGES.gravity.min, Math.min(PHYSICS_RANGES.gravity.max, gravity));
+    }
     this.reheat(0.4);
   }
 
