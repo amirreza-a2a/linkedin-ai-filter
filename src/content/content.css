@@ -1,4 +1,5 @@
-.feedrule-hidden > *:not(.feedrule-placeholder) {
+.feedrule-hidden > *:not(.feedrule-placeholder),
+[data-feedrule-hidden="true"] > *:not(.feedrule-placeholder) {
   display: none !important;
 }
 

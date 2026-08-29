@@ -696,8 +696,8 @@
   // --- 5. Content Script Core Pipeline ---
   // src/content/content-index.js
   // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
-  // Identity-aware incremental reprocessing for initial load, Load More, and container reuse.
-  // Hardened against self-mutation loops, memory leaks, and DOM recycling race conditions.
+  // Identity-aware incremental reprocessing for initial load, Load More, container reuse, and video autoplay.
+  // Hardened against video autoplay flicker loops, self-mutation loops, memory leaks, and DOM recycling race conditions.
   
   
   
@@ -742,6 +742,24 @@
       hash = (hash * 33) ^ str.charCodeAt(i);
     }
     return "t" + (hash >>> 0).toString(36);
+  }
+  
+  /**
+   * Helper to pause any active video playback within a hidden post container
+   * to prevent background CPU consumption and continuous media state updates.
+   *
+   * @param {Element|Object} container
+   */
+  function pauseVideosInContainer(container) {
+    if (!container || typeof container.querySelectorAll !== "function") return;
+    try {
+      const videos = container.querySelectorAll("video");
+      for (const v of videos) {
+        if (v && typeof v.pause === "function" && !v.paused) {
+          v.pause();
+        }
+      }
+    } catch {}
   }
   
   /**
@@ -895,11 +913,15 @@
     // If user previously clicked "Show anyway" on this post identity, preserve user reveal
     if (userRevealedPostIds.has(decision.id) || el.dataset?.feedruleUserRevealed === "1") {
       el.classList?.remove?.(HIDDEN_CLASS);
+      el.removeAttribute?.("data-feedrule-hidden");
+      if (el.dataset?.feedruleHidden) delete el.dataset.feedruleHidden;
       return;
     }
   
     if (!decision.hide) {
       el.classList?.remove?.(HIDDEN_CLASS);
+      el.removeAttribute?.("data-feedrule-hidden");
+      if (el.dataset?.feedruleHidden) delete el.dataset.feedruleHidden;
       if (el.dataset?.feedruleWrapped) {
         delete el.dataset.feedruleWrapped;
         const placeholder = el.querySelector?.(".feedrule-placeholder");
@@ -908,40 +930,53 @@
       return;
     }
   
-    if (el.classList?.contains?.(HIDDEN_CLASS) && el.dataset?.feedruleWrapped) return;
-  
+    // Authoritative hidden state application
     el.classList?.add?.(HIDDEN_CLASS);
+    el.setAttribute?.("data-feedrule-hidden", "true");
+    if (el.dataset) el.dataset.feedruleHidden = "true";
   
-    if (!el.dataset?.feedruleWrapped && typeof document !== "undefined") {
+    // Pause any autoplaying videos inside the hidden post
+    pauseVideosInContainer(el);
+  
+    if (el.dataset?.feedruleWrapped && el.querySelector?.(".feedrule-placeholder")) return;
+  
+    if (typeof document !== "undefined") {
       if (el.dataset) el.dataset.feedruleWrapped = "1";
-      const placeholder = document.createElement("div");
-      placeholder.className = "feedrule-placeholder";
+      let placeholder = el.querySelector?.(".feedrule-placeholder");
+      if (!placeholder) {
+        placeholder = document.createElement("div");
+        placeholder.className = "feedrule-placeholder";
   
-      const label = document.createElement("span");
-      label.textContent = decision.reason
-        ? `Hidden by your filter: ${decision.reason}`
-        : "Hidden by your filter";
+        const label = document.createElement("span");
+        label.textContent = decision.reason
+          ? `Hidden by your filter: ${decision.reason}`
+          : "Hidden by your filter";
   
-      const showBtn = document.createElement("button");
-      showBtn.type = "button";
-      showBtn.className = "feedrule-show-btn";
-      showBtn.textContent = "Show anyway";
-      if (showBtn.addEventListener) {
-        showBtn.addEventListener("click", () => {
-          markPostUserRevealed(decision.id);
-          if (el.dataset) el.dataset.feedruleUserRevealed = "1";
-          el.classList?.remove?.(HIDDEN_CLASS);
-        });
-      }
+        const showBtn = document.createElement("button");
+        showBtn.type = "button";
+        showBtn.className = "feedrule-show-btn";
+        showBtn.textContent = "Show anyway";
+        if (showBtn.addEventListener) {
+          showBtn.addEventListener("click", () => {
+            markPostUserRevealed(decision.id);
+            if (el.dataset) {
+              el.dataset.feedruleUserRevealed = "1";
+              delete el.dataset.feedruleHidden;
+            }
+            el.removeAttribute?.("data-feedrule-hidden");
+            el.classList?.remove?.(HIDDEN_CLASS);
+          });
+        }
   
-      placeholder.appendChild(label);
-      placeholder.appendChild(showBtn);
-      if (el.prepend) {
-        el.prepend(placeholder);
-      } else if (el.insertBefore && el.firstChild) {
-        el.insertBefore(placeholder, el.firstChild);
-      } else if (el.appendChild) {
-        el.appendChild(placeholder);
+        placeholder.appendChild(label);
+        placeholder.appendChild(showBtn);
+        if (el.prepend) {
+          el.prepend(placeholder);
+        } else if (el.insertBefore && el.firstChild) {
+          el.insertBefore(placeholder, el.firstChild);
+        } else if (el.appendChild) {
+          el.appendChild(placeholder);
+        }
       }
     }
   }
@@ -1128,6 +1163,8 @@
       // If node was previously used for a different post (DOM reuse), clean up previous state
       if (prevPostIdOnNode && prevPostIdOnNode !== post.id) {
         node.classList?.remove?.(HIDDEN_CLASS);
+        node.removeAttribute?.("data-feedrule-hidden");
+        if (node.dataset?.feedruleHidden) delete node.dataset.feedruleHidden;
         if (node.dataset?.feedruleWrapped) {
           delete node.dataset.feedruleWrapped;
           const oldPlaceholder = node.querySelector?.(".feedrule-placeholder");
@@ -1216,7 +1253,7 @@
   /**
    * Centralized MutationObserver handler.
    * Observes child additions and targeted container attributes, resolving enclosing post containers.
-   * Hardened to prevent self-mutation loops from FeedRule's own DOM modifications.
+   * Hardened to prevent video autoplay flicker loops and self-mutation loops.
    *
    * @param {MutationRecord[]} mutations
    */
@@ -1242,9 +1279,26 @@
             continue;
           }
   
-          // If the added node is inside an existing container, add the enclosing container
+          // If the added node is inside an existing container, resolve enclosing container
           const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
           if (enclosing) {
+            const currentPostId = nodeToPostId.get(enclosing);
+            // If the enclosing container is already classified as hidden, enforce hidden state synchronously
+            if (currentPostId && decisionsById.has(currentPostId)) {
+              const decision = decisionsById.get(currentPostId);
+              if (decision?.hide && !userRevealedPostIds.has(currentPostId) && enclosing.dataset?.feedruleUserRevealed !== "1") {
+                // Synchronous re-assertion: ensure classes/attributes are intact & pause video
+                if (!enclosing.classList?.contains?.(HIDDEN_CLASS)) {
+                  enclosing.classList?.add?.(HIDDEN_CLASS);
+                }
+                if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
+                  enclosing.setAttribute?.("data-feedrule-hidden", "true");
+                }
+                pauseVideosInContainer(enclosing);
+                // Already classified and hidden: do NOT queue for re-scanning
+                continue;
+              }
+            }
             mutationQueue.add(enclosing);
           } else {
             mutationQueue.add(node);
@@ -1262,18 +1316,41 @@
             continue;
           }
   
-          // Self-mutation defense on class attribute:
-          // If the class attribute mutated on a post container that already has an established post identity and cached decision,
-          // ignore the mutation (since FeedRule toggling feedrule-hidden caused it)
-          if (m.attributeName === "class") {
-            const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
-            const currentPostId = nodeToPostId.get(enclosing);
-            if (currentPostId && decisionsById.has(currentPostId)) {
+          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
+          const currentPostId = nodeToPostId.get(enclosing);
+  
+          // Identity attributes (data-urn, data-id) signal container recycling or new post binding
+          const isIdentityAttribute =
+            m.attributeName === "data-urn" ||
+            m.attributeName === "data-id" ||
+            m.attributeName === "data-chameleon-urn";
+  
+          // If this is a presentation attribute (e.g. class) and container is already classified
+          if (!isIdentityAttribute && currentPostId && decisionsById.has(currentPostId)) {
+            const decision = decisionsById.get(currentPostId);
+            if (
+              decision?.hide &&
+              !userRevealedPostIds.has(currentPostId) &&
+              enclosing.dataset?.feedruleUserRevealed !== "1"
+            ) {
+              // Synchronously re-assert hidden state if LinkedIn stripped classes during video playback
+              if (!enclosing.classList?.contains?.(HIDDEN_CLASS)) {
+                enclosing.classList?.add?.(HIDDEN_CLASS);
+              }
+              if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
+                enclosing.setAttribute?.("data-feedrule-hidden", "true");
+              }
+              pauseVideosInContainer(enclosing);
+              // Class mutation on an already-hidden post: do not queue for re-scanning
               continue;
+            } else if (!decision?.hide || userRevealedPostIds.has(currentPostId)) {
+              // Class mutation on an already-shown post: do not queue for re-scanning
+              if (m.attributeName === "class") {
+                continue;
+              }
             }
           }
   
-          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
           mutationQueue.add(enclosing);
           sawAdditions = true;
         }
