@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   PAGE_PATHS,
   getCanonicalRelativePath,
@@ -68,15 +70,38 @@ function createMockChrome(initialTabs = []) {
 }
 
 // =========================================================================
-// 1. CANONICALIZATION & PATH NORMALIZATION
+// 1. FILESYSTEM & CANONICAL RESOLUTION VERIFICATION
 // =========================================================================
 
-test("Canonicalization: Page keys map to correct relative extension paths", () => {
+test("Filesystem Audit: Every canonical PAGE_PATH physically exists on disk", () => {
+  for (const [key, relPath] of Object.entries(PAGE_PATHS)) {
+    const fullPath = path.resolve(relPath);
+    assert.ok(
+      fs.existsSync(fullPath),
+      `Target file for key '${key}' (${relPath}) must exist on disk at ${fullPath}`
+    );
+  }
+});
+
+test("Canonicalization: Page keys and valid aliases map to correct extension paths", () => {
   assert.equal(getCanonicalRelativePath("dashboard"), "src/dashboard/dashboard.html");
   assert.equal(getCanonicalRelativePath("saved"), "src/saved/saved.html");
   assert.equal(getCanonicalRelativePath("brain"), "src/saved/saved.html");
   assert.equal(getCanonicalRelativePath("graph"), "src/graph/graph.html");
   assert.equal(getCanonicalRelativePath("options"), "src/options/options.html");
+
+  // Path inputs
+  assert.equal(getCanonicalRelativePath("src/graph/graph.html"), "src/graph/graph.html");
+  assert.equal(getCanonicalRelativePath("/src/dashboard/dashboard.html"), "src/dashboard/dashboard.html");
+  assert.equal(getCanonicalRelativePath("../saved/saved.html"), "src/saved/saved.html");
+});
+
+test("Strict Allowlist: Unknown or malformed page keys return empty string (reject)", () => {
+  assert.equal(getCanonicalRelativePath("unknown_key"), "");
+  assert.equal(getCanonicalRelativePath("src/graph/graph"), "");
+  assert.equal(getCanonicalRelativePath("invalid.html"), "");
+  assert.equal(getCanonicalRelativePath(""), "");
+  assert.equal(getCanonicalRelativePath(null), "");
 });
 
 test("Canonicalization: Query parameters and hash fragments are stripped from identity", () => {
@@ -92,6 +117,29 @@ test("Canonicalization: Query parameters and hash fragments are stripped from id
     normalizeExtensionPathname("/src/saved/saved.html?filter=test"),
     "src/saved/saved.html"
   );
+});
+
+test("Canonical URL Generation: Produces exact chrome-extension:// URLs for all pages", () => {
+  const { mock } = createMockChrome([]);
+  globalThis.chrome = mock;
+
+  assert.equal(
+    getCanonicalExtensionUrl("graph"),
+    "chrome-extension://feedrule-extension-id/src/graph/graph.html"
+  );
+  assert.equal(
+    getCanonicalExtensionUrl("dashboard"),
+    "chrome-extension://feedrule-extension-id/src/dashboard/dashboard.html"
+  );
+  assert.equal(
+    getCanonicalExtensionUrl("saved"),
+    "chrome-extension://feedrule-extension-id/src/saved/saved.html"
+  );
+  assert.equal(
+    getCanonicalExtensionUrl("options"),
+    "chrome-extension://feedrule-extension-id/src/options/options.html"
+  );
+  assert.equal(getCanonicalExtensionUrl("unknown"), "");
 });
 
 test("External Isolation: isInternalExtensionUrl validates internal vs external URLs", () => {
@@ -149,7 +197,7 @@ test("Current-Tab Optimization: Navigating to already-active page avoids redunda
   assert.equal(calls.update.length, 0); // Redundant tabs.update skipped
 });
 
-test("Tab Creation: Creates exactly 1 tab when page is not open", async () => {
+test("Tab Creation: Creates exactly 1 tab with verified URL when page is not open", async () => {
   const { mock, calls } = createMockChrome([]);
   globalThis.chrome = mock;
 

@@ -11,30 +11,77 @@ export const PAGE_PATHS = {
   options: "src/options/options.html",
 };
 
+// Strict allowlist mapping of supported page keys, canonical paths, and known aliases
+const STRICT_CANONICAL_MAP = {
+  // Canonical keys
+  dashboard: "src/dashboard/dashboard.html",
+  saved: "src/saved/saved.html",
+  brain: "src/saved/saved.html",
+  graph: "src/graph/graph.html",
+  options: "src/options/options.html",
+
+  // Canonical paths
+  "src/dashboard/dashboard.html": "src/dashboard/dashboard.html",
+  "src/saved/saved.html": "src/saved/saved.html",
+  "src/graph/graph.html": "src/graph/graph.html",
+  "src/options/options.html": "src/options/options.html",
+
+  // Root-relative aliases
+  "/src/dashboard/dashboard.html": "src/dashboard/dashboard.html",
+  "/src/saved/saved.html": "src/saved/saved.html",
+  "/src/graph/graph.html": "src/graph/graph.html",
+  "/src/options/options.html": "src/options/options.html",
+
+  // Filename aliases
+  "dashboard.html": "src/dashboard/dashboard.html",
+  "saved.html": "src/saved/saved.html",
+  "graph.html": "src/graph/graph.html",
+  "options.html": "src/options/options.html",
+
+  // Relative directory aliases
+  "../dashboard/dashboard.html": "src/dashboard/dashboard.html",
+  "../saved/saved.html": "src/saved/saved.html",
+  "../graph/graph.html": "src/graph/graph.html",
+  "../options/options.html": "src/options/options.html",
+};
+
 // Per-page in-flight navigation promises to coalesce concurrent clicks for the same page
 const inFlightNavigations = new Map();
 
 /**
- * Normalizes a page key or path to its canonical relative extension path.
+ * Normalizes a page key or path to its canonical relative extension path using a strict allowlist.
+ * Returns "" for unknown or invalid inputs to prevent constructing arbitrary/malformed URLs.
  *
  * @param {string} pageKeyOrPath
- * @returns {string} Relative path (e.g. "src/dashboard/dashboard.html")
+ * @returns {string} Canonical relative path (e.g. "src/graph/graph.html") or ""
  */
 export function getCanonicalRelativePath(pageKeyOrPath) {
   if (!pageKeyOrPath || typeof pageKeyOrPath !== "string") return "";
-  const key = pageKeyOrPath.trim().toLowerCase();
-  if (PAGE_PATHS[key]) {
-    return PAGE_PATHS[key];
+
+  let clean = pageKeyOrPath.trim().toLowerCase();
+
+  // If full chrome-extension:// URL, extract path after origin
+  const extMatch = clean.match(/^chrome-extension:\/\/[a-z0-9_-]+\/(.*)$/i);
+  if (extMatch && extMatch[1]) {
+    clean = extMatch[1];
   }
-  // Strip leading slash, query parameters, and hash fragments
-  let clean = pageKeyOrPath.trim().replace(/^\//, "").split("?")[0].split("#")[0];
-  // Handle relative prefix if passed as "dashboard.html" or "./dashboard.html"
-  for (const knownPath of Object.values(PAGE_PATHS)) {
-    if (knownPath.endsWith(clean) || clean.endsWith(knownPath)) {
-      return knownPath;
-    }
+
+  // Strip query parameters and hash fragments
+  clean = clean.split("?")[0].split("#")[0].trim();
+
+  // 1. Direct lookup in strict canonical map
+  if (STRICT_CANONICAL_MAP[clean]) {
+    return STRICT_CANONICAL_MAP[clean];
   }
-  return clean;
+
+  // 2. Strip leading slashes / dots and check again
+  const stripped = clean.replace(/^[./]+/, "");
+  if (STRICT_CANONICAL_MAP[stripped]) {
+    return STRICT_CANONICAL_MAP[stripped];
+  }
+
+  // Unknown or invalid page input -> return empty string (reject)
+  return "";
 }
 
 /**
@@ -49,39 +96,25 @@ export function isInternalExtensionUrl(urlOrPath) {
   if (/^https?:\/\//i.test(str)) {
     return false; // External web URLs (LinkedIn, docs, GitHub, etc.)
   }
-  if (str.startsWith("chrome-extension://")) {
-    return Object.values(PAGE_PATHS).some((p) => str.includes(p));
-  }
   const rel = getCanonicalRelativePath(str);
-  return Object.values(PAGE_PATHS).includes(rel);
+  return Boolean(rel && Object.values(PAGE_PATHS).includes(rel));
 }
 
 /**
  * Returns the normalized pathname of an extension URL, stripping origin, query, and hash.
  *
  * @param {string} urlOrPath
- * @returns {string} Normalized pathname (e.g. "src/dashboard/dashboard.html")
+ * @returns {string} Normalized pathname (e.g. "src/dashboard/dashboard.html") or ""
  */
 export function normalizeExtensionPathname(urlOrPath) {
-  if (!urlOrPath || typeof urlOrPath !== "string") return "";
-  let clean = urlOrPath.trim();
-
-  // If full chrome-extension:// URL, extract path after origin
-  const extMatch = clean.match(/^chrome-extension:\/\/[a-z0-9_-]+\/(.*)$/i);
-  if (extMatch && extMatch[1]) {
-    clean = extMatch[1];
-  }
-
-  // Strip query and hash
-  clean = clean.split("?")[0].split("#")[0].replace(/^\//, "");
-  return getCanonicalRelativePath(clean);
+  return getCanonicalRelativePath(urlOrPath);
 }
 
 /**
  * Resolves the full canonical chrome-extension:// URL for a given page key or path.
  *
  * @param {string} pageKeyOrPath
- * @returns {string} Full extension URL
+ * @returns {string} Full extension URL or "" if invalid
  */
 export function getCanonicalExtensionUrl(pageKeyOrPath) {
   const relPath = getCanonicalRelativePath(pageKeyOrPath);
@@ -106,22 +139,34 @@ export function getCanonicalExtensionUrl(pageKeyOrPath) {
  * @returns {Promise<Object|null>} Resolved tab object
  */
 export async function openExtensionPage(pageKeyOrPath) {
+  console.log(`[FeedRule][NAV] requested page: ${pageKeyOrPath}`);
+
   // Never intercept external web URLs
   if (typeof pageKeyOrPath === "string" && /^https?:\/\//i.test(pageKeyOrPath.trim())) {
+    const extUrl = pageKeyOrPath.trim();
+    console.log(`[FeedRule][NAV] external URL detected, opening in new tab: ${extUrl}`);
     if (typeof chrome !== "undefined" && chrome.tabs?.create) {
-      return chrome.tabs.create({ url: pageKeyOrPath.trim() });
+      return chrome.tabs.create({ url: extUrl });
     }
     return null;
   }
 
   const relPath = getCanonicalRelativePath(pageKeyOrPath);
-  if (!relPath) return null;
+  console.log(`[FeedRule][NAV] canonical relative path: ${relPath}`);
+
+  if (!relPath) {
+    console.warn(`[FeedRule][NAV] Rejected unknown internal page key/path: "${pageKeyOrPath}"`);
+    return null;
+  }
 
   const canonicalUrl = getCanonicalExtensionUrl(pageKeyOrPath);
   const canonicalPathname = normalizeExtensionPathname(relPath);
+  console.log(`[FeedRule][NAV] canonical extension URL: ${canonicalUrl}`);
+  console.log(`[FeedRule][NAV] normalized pathname: ${canonicalPathname}`);
 
   // Per-page in-flight mutex: coalesce rapid clicks for the SAME page without blocking other pages
   if (inFlightNavigations.has(canonicalPathname)) {
+    console.log(`[FeedRule][NAV] in-flight navigation exists for ${canonicalPathname}, coalescing`);
     return inFlightNavigations.get(canonicalPathname);
   }
 
@@ -152,11 +197,14 @@ export async function openExtensionPage(pageKeyOrPath) {
         }
       }
 
+      console.log(`[FeedRule][NAV] query result: found ${matchingTabs ? matchingTabs.length : 0} matching tabs`);
+
       if (matchingTabs && matchingTabs.length > 0) {
         const existingTab = matchingTabs[0];
 
         // Current-Tab Optimization: If this page is already active, avoid redundant tabs.update()
         if (existingTab.active) {
+          console.log(`[FeedRule][NAV] tab ${existingTab.id} is already active, focusing window`);
           if (existingTab.windowId && chrome.windows?.update) {
             try {
               await chrome.windows.update(existingTab.windowId, { focused: true });
@@ -168,7 +216,7 @@ export async function openExtensionPage(pageKeyOrPath) {
         }
 
         try {
-          // Activate tab and focus its window
+          console.log(`[FeedRule][NAV] activating existing tab ${existingTab.id}`);
           await chrome.tabs.update(existingTab.id, { active: true });
           if (existingTab.windowId && chrome.windows?.update) {
             try {
@@ -179,12 +227,12 @@ export async function openExtensionPage(pageKeyOrPath) {
           }
           return existingTab;
         } catch (updateErr) {
-          // Stale tab ID (tab was closed right as update was called) -> fall through to create
-          console.warn("[FeedRule] Stale tab ID on update, falling back to create:", updateErr);
+          console.warn("[FeedRule][NAV] Stale tab ID on update, falling back to create:", updateErr);
         }
       }
 
       // No existing tab -> create exactly one new tab
+      console.log(`[FeedRule][NAV] creating tab with URL: ${canonicalUrl}`);
       return await chrome.tabs.create({ url: canonicalUrl });
     } finally {
       inFlightNavigations.delete(canonicalPathname);
