@@ -3,6 +3,9 @@
 
 import {
   buildKnowledgeGraph,
+  filterPostsByTopics,
+  filterPostsByAuthors,
+  filterGraphByNodeTypes,
   filterGraphByNodeType,
   extractNeighborhood,
   areGraphsEqual,
@@ -15,9 +18,33 @@ import { openExtensionPage } from "../navigation/navigation.js";
 
 // DOM Elements
 const canvas = document.getElementById("graphCanvas");
-const topicFilterSelect = document.getElementById("topicFilterSelect");
-const authorFilterSelect = document.getElementById("authorFilterSelect");
-const nodeTypeSelect = document.getElementById("nodeTypeSelect");
+
+// Filter Controls Elements
+const nodeTypeDropdown = document.getElementById("nodeTypeDropdown");
+const nodeTypeTrigger = document.getElementById("nodeTypeTrigger");
+const nodeTypeSummary = document.getElementById("nodeTypeSummary");
+const nodeTypeOptions = document.getElementById("nodeTypeOptions");
+const nodeTypeSelectAll = document.getElementById("nodeTypeSelectAll");
+const nodeTypeClear = document.getElementById("nodeTypeClear");
+
+const topicDropdown = document.getElementById("topicDropdown");
+const topicTrigger = document.getElementById("topicTrigger");
+const topicSummary = document.getElementById("topicSummary");
+const topicPopover = document.getElementById("topicPopover");
+const topicSearchInput = document.getElementById("topicSearchInput");
+const topicOptions = document.getElementById("topicOptions");
+const topicSelectAll = document.getElementById("topicSelectAll");
+const topicClear = document.getElementById("topicClear");
+
+const authorDropdown = document.getElementById("authorDropdown");
+const authorTrigger = document.getElementById("authorTrigger");
+const authorSummary = document.getElementById("authorSummary");
+const authorPopover = document.getElementById("authorPopover");
+const authorSearchInput = document.getElementById("authorSearchInput");
+const authorOptions = document.getElementById("authorOptions");
+const authorSelectAll = document.getElementById("authorSelectAll");
+const authorClear = document.getElementById("authorClear");
+
 const searchInput = document.getElementById("searchGraph");
 const clearFiltersBtn = document.getElementById("clearFiltersBtn");
 const fitGraphBtn = document.getElementById("fitGraphBtn");
@@ -52,6 +79,191 @@ let focusedNodeId = null;
 let layout = null;
 let renderer = null;
 let searchDebounceTimer = null;
+
+// Multi-Select Filter State
+const selectedNodeTypes = new Set(["post", "topic", "author"]);
+const selectedTopics = new Set();   // Set of lowercase topic names (empty = all)
+const selectedAuthors = new Set();  // Set of lowercase author names (empty = all)
+let availableTopics = [];           // Array of { name, count, lower }
+let availableAuthors = [];          // Array of { name, count, lower }
+
+function closeAllDropdowns() {
+  document.querySelectorAll(".multiselect-dropdown").forEach((d) => d.classList.remove("open"));
+}
+
+function updateNodeTypeSummary() {
+  if (!nodeTypeSummary) return;
+  const count = selectedNodeTypes.size;
+  if (count === 3 || count === 0) {
+    nodeTypeSummary.textContent = "Node Types: All";
+  } else if (count === 1) {
+    if (selectedNodeTypes.has("post")) nodeTypeSummary.textContent = "Posts only";
+    else if (selectedNodeTypes.has("topic")) nodeTypeSummary.textContent = "Topics only";
+    else if (selectedNodeTypes.has("author")) nodeTypeSummary.textContent = "Authors only";
+  } else {
+    nodeTypeSummary.textContent = `${count} types`;
+  }
+}
+
+function updateTopicSummary() {
+  if (!topicSummary) return;
+  const count = selectedTopics.size;
+  if (count === 0) {
+    topicSummary.textContent = "Topics: All";
+  } else if (count === 1) {
+    const firstLower = Array.from(selectedTopics)[0];
+    const match = availableTopics.find((t) => t.lower === firstLower);
+    topicSummary.textContent = match ? `Topic: ${match.name}` : `Topics · 1`;
+  } else {
+    topicSummary.textContent = `Topics · ${count}`;
+  }
+}
+
+function updateAuthorSummary() {
+  if (!authorSummary) return;
+  const count = selectedAuthors.size;
+  if (count === 0) {
+    authorSummary.textContent = "Authors: All";
+  } else if (count === 1) {
+    const firstLower = Array.from(selectedAuthors)[0];
+    const match = availableAuthors.find((a) => a.lower === firstLower);
+    authorSummary.textContent = match ? `Author: ${match.name}` : `Authors · 1`;
+  } else {
+    authorSummary.textContent = `Authors · ${count}`;
+  }
+}
+
+function populateFilterOptions(posts) {
+  const topicCounts = new Map();
+  const authorCounts = new Map();
+  const canonicalTopicNames = new Map();
+  const canonicalAuthorNames = new Map();
+
+  for (const p of posts) {
+    for (const t of p.topics || []) {
+      if (typeof t === "string" && t.trim()) {
+        const clean = t.trim();
+        const lower = clean.toLowerCase();
+        topicCounts.set(lower, (topicCounts.get(lower) || 0) + 1);
+        if (!canonicalTopicNames.has(lower)) {
+          canonicalTopicNames.set(lower, clean);
+        }
+      }
+    }
+    if (typeof p.author === "string" && p.author.trim()) {
+      const clean = p.author.trim();
+      const lower = clean.toLowerCase();
+      authorCounts.set(lower, (authorCounts.get(lower) || 0) + 1);
+      if (!canonicalAuthorNames.has(lower)) {
+        canonicalAuthorNames.set(lower, clean);
+      }
+    }
+  }
+
+  availableTopics = Array.from(topicCounts.keys())
+    .map((lower) => ({
+      name: canonicalTopicNames.get(lower),
+      lower,
+      count: topicCounts.get(lower),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  availableAuthors = Array.from(authorCounts.keys())
+    .map((lower) => ({
+      name: canonicalAuthorNames.get(lower),
+      lower,
+      count: authorCounts.get(lower),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  renderTopicOptionsList();
+  renderAuthorOptionsList();
+  updateNodeTypeSummary();
+  updateTopicSummary();
+  updateAuthorSummary();
+}
+
+function renderTopicOptionsList(filterQuery = "") {
+  if (!topicOptions) return;
+  const q = filterQuery.trim().toLowerCase();
+  const filtered = q
+    ? availableTopics.filter((t) => t.lower.includes(q))
+    : availableTopics;
+
+  if (filtered.length === 0) {
+    topicOptions.innerHTML = `<div class="multiselect-empty">${availableTopics.length === 0 ? "No topics found" : "No matching topics"}</div>`;
+    return;
+  }
+
+  topicOptions.innerHTML = filtered
+    .map((t) => {
+      const isChecked = selectedTopics.has(t.lower);
+      return `
+        <label class="multiselect-option">
+          <input type="checkbox" data-topic="${escapeXml(t.lower)}" ${isChecked ? "checked" : ""} />
+          <span class="option-dot dot-topic"></span>
+          <span>${escapeXml(t.name)} (${t.count})</span>
+        </label>
+      `;
+    })
+    .join("");
+
+  topicOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const lower = cb.getAttribute("data-topic");
+      if (cb.checked) {
+        selectedTopics.add(lower);
+      } else {
+        selectedTopics.delete(lower);
+      }
+      updateTopicSummary();
+      focusedNodeId = null;
+      if (focusBanner) focusBanner.style.display = "none";
+      updateGraph();
+    });
+  });
+}
+
+function renderAuthorOptionsList(filterQuery = "") {
+  if (!authorOptions) return;
+  const q = filterQuery.trim().toLowerCase();
+  const filtered = q
+    ? availableAuthors.filter((a) => a.lower.includes(q))
+    : availableAuthors;
+
+  if (filtered.length === 0) {
+    authorOptions.innerHTML = `<div class="multiselect-empty">${availableAuthors.length === 0 ? "No authors found" : "No matching authors"}</div>`;
+    return;
+  }
+
+  authorOptions.innerHTML = filtered
+    .map((a) => {
+      const isChecked = selectedAuthors.has(a.lower);
+      return `
+        <label class="multiselect-option">
+          <input type="checkbox" data-author="${escapeXml(a.lower)}" ${isChecked ? "checked" : ""} />
+          <span class="option-dot dot-author"></span>
+          <span>${escapeXml(a.name)} (${a.count})</span>
+        </label>
+      `;
+    })
+    .join("");
+
+  authorOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const lower = cb.getAttribute("data-author");
+      if (cb.checked) {
+        selectedAuthors.add(lower);
+      } else {
+        selectedAuthors.delete(lower);
+      }
+      updateAuthorSummary();
+      focusedNodeId = null;
+      if (focusBanner) focusBanner.style.display = "none";
+      updateGraph();
+    });
+  });
+}
 
 function renderNodeDetails(node) {
   if (!node) {
@@ -205,72 +417,29 @@ function renderNodeDetails(node) {
   sidebar.classList.add("open");
 }
 
-function updateFilterDropdowns(posts) {
-  const currentTopic = topicFilterSelect.value;
-  const currentAuthor = authorFilterSelect.value;
-
-  const topicsSet = new Set();
-  const authorsSet = new Set();
-
-  for (const p of posts) {
-    for (const t of p.topics || []) if (t) topicsSet.add(t);
-    if (p.author) authorsSet.add(p.author);
-  }
-
-  const sortedTopics = Array.from(topicsSet).sort((a, b) => a.localeCompare(b));
-  const sortedAuthors = Array.from(authorsSet).sort((a, b) => a.localeCompare(b));
-
-  topicFilterSelect.innerHTML =
-    `<option value="">All Topics (${sortedTopics.length})</option>` +
-    sortedTopics
-      .map(
-        (t) =>
-          `<option value="${escapeXml(t)}" ${t.toLowerCase() === currentTopic.toLowerCase() ? "selected" : ""}>${escapeXml(t)}</option>`
-      )
-      .join("");
-
-  authorFilterSelect.innerHTML =
-    `<option value="">All Authors (${sortedAuthors.length})</option>` +
-    sortedAuthors
-      .map(
-        (a) =>
-          `<option value="${escapeXml(a)}" ${a.toLowerCase() === currentAuthor.toLowerCase() ? "selected" : ""}>${escapeXml(a)}</option>`
-      )
-      .join("");
-}
-
 function updateGraph() {
-  const selTopic = topicFilterSelect.value.trim().toLowerCase();
-  const selAuthor = authorFilterSelect.value.trim().toLowerCase();
-  const selNodeType = nodeTypeSelect.value;
-  const searchQuery = searchInput.value.trim().toLowerCase();
+  const searchQuery = (searchInput ? searchInput.value : "").trim().toLowerCase();
 
-  // 1. Filter saved posts
-  let filteredPosts = allSavedPosts.filter((p) => {
-    if (selTopic) {
-      const hasTopic = (p.topics || []).some((t) => typeof t === "string" && t.toLowerCase() === selTopic);
-      if (!hasTopic) return false;
-    }
-    if (selAuthor) {
-      const matchAuthor = (p.author || "").toLowerCase() === selAuthor;
-      if (!matchAuthor) return false;
-    }
-    if (searchQuery) {
+  // 1. Filter saved posts with pure functions
+  let filteredPosts = filterPostsByTopics(allSavedPosts, selectedTopics);
+  filteredPosts = filterPostsByAuthors(filteredPosts, selectedAuthors);
+
+  if (searchQuery) {
+    filteredPosts = filteredPosts.filter((p) => {
       const matchText = (p.text || "").toLowerCase().includes(searchQuery);
       const matchAuthor = (p.author || "").toLowerCase().includes(searchQuery);
-      const matchTopic = (p.topics || []).some((t) => typeof t === "string" && t.toLowerCase().includes(searchQuery));
-      if (!matchText && !matchAuthor && !matchTopic) return false;
-    }
-    return true;
-  });
+      const matchTopic = (p.topics || []).some(
+        (t) => typeof t === "string" && t.toLowerCase().includes(searchQuery)
+      );
+      return matchText || matchAuthor || matchTopic;
+    });
+  }
 
   // 2. Build deterministic base graph
   let graph = buildKnowledgeGraph(filteredPosts);
 
-  // 3. Apply Node Type Filter (discards unselected node types and eliminates dangling edges)
-  if (selNodeType !== "all") {
-    graph = filterGraphByNodeType(graph, selNodeType);
-  }
+  // 3. Apply Node Types Filter (discards unselected node types and eliminates dangling edges)
+  graph = filterGraphByNodeTypes(graph, selectedNodeTypes);
 
   // 4. Apply Focus Mode (if active)
   if (focusedNodeId) {
@@ -289,9 +458,14 @@ function updateGraph() {
 
   if (activeGraph.nodes.length === 0) {
     emptyState.style.display = "flex";
-    emptyStateDesc.textContent = focusedNodeId || selTopic || selAuthor || searchQuery || selNodeType !== "all"
-      ? "No graph nodes match your active filters or focused neighborhood."
-      : "Posts saved in your Second Brain will automatically form your Knowledge Graph.";
+    emptyStateDesc.textContent =
+      focusedNodeId ||
+      selectedTopics.size > 0 ||
+      selectedAuthors.size > 0 ||
+      searchQuery ||
+      (selectedNodeTypes.size > 0 && selectedNodeTypes.size < 3)
+        ? "No graph nodes match your active filters or focused neighborhood."
+        : "Posts saved in your Second Brain will automatically form your Knowledge Graph.";
   } else {
     emptyState.style.display = "none";
   }
@@ -311,24 +485,40 @@ function updateGraph() {
 
 function setFocusNode(nodeId, nodeLabel) {
   focusedNodeId = nodeId;
-  focusBanner.style.display = "flex";
-  focusLabel.textContent = `🎯 Focused Neighborhood: ${nodeLabel}`;
+  if (focusBanner) focusBanner.style.display = "flex";
+  if (focusLabel) focusLabel.textContent = `🎯 Focused Neighborhood: ${nodeLabel}`;
   updateGraph();
 }
 
 function exitFocus() {
   focusedNodeId = null;
-  focusBanner.style.display = "none";
+  if (focusBanner) focusBanner.style.display = "none";
   updateGraph();
 }
 
 function clearFilters() {
-  topicFilterSelect.value = "";
-  authorFilterSelect.value = "";
-  nodeTypeSelect.value = "all";
-  searchInput.value = "";
+  selectedNodeTypes.clear();
+  selectedNodeTypes.add("post");
+  selectedNodeTypes.add("topic");
+  selectedNodeTypes.add("author");
+  if (nodeTypeOptions) {
+    nodeTypeOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => (cb.checked = true));
+  }
+
+  selectedTopics.clear();
+  selectedAuthors.clear();
+  if (searchInput) searchInput.value = "";
+  if (topicSearchInput) topicSearchInput.value = "";
+  if (authorSearchInput) authorSearchInput.value = "";
+
+  renderTopicOptionsList();
+  renderAuthorOptionsList();
+  updateNodeTypeSummary();
+  updateTopicSummary();
+  updateAuthorSummary();
+
   focusedNodeId = null;
-  focusBanner.style.display = "none";
+  if (focusBanner) focusBanner.style.display = "none";
   updateGraph();
 }
 
@@ -336,7 +526,7 @@ async function init() {
   allSavedPosts = await getSavedPosts();
   console.log("[FeedRule][GRAPH] loaded saved posts count:", allSavedPosts.length);
 
-  updateFilterDropdowns(allSavedPosts);
+  populateFilterOptions(allSavedPosts);
 
   const rect = canvas.parentElement.getBoundingClientRect();
   const w = rect.width || 800;
@@ -353,30 +543,169 @@ async function init() {
   renderer.start();
 }
 
-// Event Listeners for Filters
-topicFilterSelect.addEventListener("change", () => {
-  focusedNodeId = null;
-  focusBanner.style.display = "none";
-  updateGraph();
+// Multi-Select Dropdown Popover Toggles
+if (nodeTypeTrigger) {
+  nodeTypeTrigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = nodeTypeDropdown.classList.contains("open");
+    closeAllDropdowns();
+    if (!isOpen) nodeTypeDropdown.classList.add("open");
+  });
+}
+
+if (topicTrigger) {
+  topicTrigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = topicDropdown.classList.contains("open");
+    closeAllDropdowns();
+    if (!isOpen) {
+      topicDropdown.classList.add("open");
+      if (topicSearchInput) topicSearchInput.focus();
+    }
+  });
+}
+
+if (authorTrigger) {
+  authorTrigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = authorDropdown.classList.contains("open");
+    closeAllDropdowns();
+    if (!isOpen) {
+      authorDropdown.classList.add("open");
+      if (authorSearchInput) authorSearchInput.focus();
+    }
+  });
+}
+
+// Stop popover clicks from bubbling to document
+[nodeTypePopover, topicPopover, authorPopover].forEach((popover) => {
+  if (popover) {
+    popover.addEventListener("click", (e) => e.stopPropagation());
+  }
 });
 
-authorFilterSelect.addEventListener("change", () => {
-  focusedNodeId = null;
-  focusBanner.style.display = "none";
-  updateGraph();
+// Close popovers on click outside and on Escape key
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".multiselect-dropdown")) {
+    closeAllDropdowns();
+  }
 });
 
-nodeTypeSelect.addEventListener("change", () => {
-  updateGraph();
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeAllDropdowns();
+  }
 });
 
-searchInput.addEventListener("input", () => {
-  clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(updateGraph, 150);
-});
+// Node Type Dropdown Checkbox Controls
+if (nodeTypeOptions) {
+  nodeTypeOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const val = cb.value;
+      if (cb.checked) {
+        selectedNodeTypes.add(val);
+      } else {
+        selectedNodeTypes.delete(val);
+      }
+      updateNodeTypeSummary();
+      updateGraph();
+    });
+  });
+}
 
-clearFiltersBtn.addEventListener("click", clearFilters);
-exitFocusBtn.addEventListener("click", exitFocus);
+if (nodeTypeSelectAll) {
+  nodeTypeSelectAll.addEventListener("click", () => {
+    selectedNodeTypes.add("post");
+    selectedNodeTypes.add("topic");
+    selectedNodeTypes.add("author");
+    if (nodeTypeOptions) {
+      nodeTypeOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => (cb.checked = true));
+    }
+    updateNodeTypeSummary();
+    updateGraph();
+  });
+}
+
+if (nodeTypeClear) {
+  nodeTypeClear.addEventListener("click", () => {
+    selectedNodeTypes.clear();
+    if (nodeTypeOptions) {
+      nodeTypeOptions.querySelectorAll("input[type='checkbox']").forEach((cb) => (cb.checked = false));
+    }
+    updateNodeTypeSummary();
+    updateGraph();
+  });
+}
+
+// Topic Dropdown Controls
+if (topicSearchInput) {
+  topicSearchInput.addEventListener("input", () => {
+    renderTopicOptionsList(topicSearchInput.value);
+  });
+}
+
+if (topicSelectAll) {
+  topicSelectAll.addEventListener("click", () => {
+    for (const t of availableTopics) {
+      selectedTopics.add(t.lower);
+    }
+    renderTopicOptionsList(topicSearchInput?.value || "");
+    updateTopicSummary();
+    updateGraph();
+  });
+}
+
+if (topicClear) {
+  topicClear.addEventListener("click", () => {
+    selectedTopics.clear();
+    renderTopicOptionsList(topicSearchInput?.value || "");
+    updateTopicSummary();
+    updateGraph();
+  });
+}
+
+// Author Dropdown Controls
+if (authorSearchInput) {
+  authorSearchInput.addEventListener("input", () => {
+    renderAuthorOptionsList(authorSearchInput.value);
+  });
+}
+
+if (authorSelectAll) {
+  authorSelectAll.addEventListener("click", () => {
+    for (const a of availableAuthors) {
+      selectedAuthors.add(a.lower);
+    }
+    renderAuthorOptionsList(authorSearchInput?.value || "");
+    updateAuthorSummary();
+    updateGraph();
+  });
+}
+
+if (authorClear) {
+  authorClear.addEventListener("click", () => {
+    selectedAuthors.clear();
+    renderAuthorOptionsList(authorSearchInput?.value || "");
+    updateAuthorSummary();
+    updateGraph();
+  });
+}
+
+// Search and Global Controls
+if (searchInput) {
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(updateGraph, 150);
+  });
+}
+
+if (clearFiltersBtn) {
+  clearFiltersBtn.addEventListener("click", clearFilters);
+}
+
+if (exitFocusBtn) {
+  exitFocusBtn.addEventListener("click", exitFocus);
+}
 
 fitGraphBtn.addEventListener("click", () => {
   if (renderer) renderer.fitGraph();

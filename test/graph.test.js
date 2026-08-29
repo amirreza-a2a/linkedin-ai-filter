@@ -4,6 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   buildKnowledgeGraph,
+  filterPostsByTopics,
+  filterPostsByAuthors,
+  filterGraphByNodeTypes,
   filterGraphByNodeType,
   extractNeighborhood,
 } from "../src/graph/graph-builder.js";
@@ -381,9 +384,29 @@ test("DOM Contract: All element IDs required by graph.js exist in graph.html", (
 
   const requiredElementIds = [
     "graphCanvas",
-    "topicFilterSelect",
-    "authorFilterSelect",
-    "nodeTypeSelect",
+    "nodeTypeDropdown",
+    "nodeTypeTrigger",
+    "nodeTypeSummary",
+    "nodeTypePopover",
+    "nodeTypeOptions",
+    "nodeTypeSelectAll",
+    "nodeTypeClear",
+    "topicDropdown",
+    "topicTrigger",
+    "topicSummary",
+    "topicPopover",
+    "topicSearchInput",
+    "topicOptions",
+    "topicSelectAll",
+    "topicClear",
+    "authorDropdown",
+    "authorTrigger",
+    "authorSummary",
+    "authorPopover",
+    "authorSearchInput",
+    "authorOptions",
+    "authorSelectAll",
+    "authorClear",
     "searchGraph",
     "clearFiltersBtn",
     "fitGraphBtn",
@@ -439,25 +462,18 @@ test("Data Pipeline: Non-empty saved posts produce non-empty graph and default f
   assert.equal(baseGraph.edges.length, 6); // 4 has-topic edges + 2 written-by edges
 
   // 2. Default filters (all topics, all authors, all types, empty search)
-  const selTopic = "";
-  const selAuthor = "";
-  const selNodeType = "all";
-  const searchQuery = "";
+  const selectedTopics = new Set();
+  const selectedAuthors = new Set();
+  const selectedNodeTypes = new Set(["post", "topic", "author"]);
 
-  const filteredPosts = mockSavedPosts.filter((p) => {
-    if (selTopic && !(p.topics || []).some((t) => t.toLowerCase() === selTopic.toLowerCase())) return false;
-    if (selAuthor && (p.author || "").toLowerCase() !== selAuthor.toLowerCase()) return false;
-    if (searchQuery && !(p.text || "").toLowerCase().includes(searchQuery)) return false;
-    return true;
-  });
+  let filteredPosts = filterPostsByTopics(mockSavedPosts, selectedTopics);
+  filteredPosts = filterPostsByAuthors(filteredPosts, selectedAuthors);
 
   // Verify filteredPosts is identical in length and content
   assert.equal(filteredPosts.length, mockSavedPosts.length);
 
   let activeGraph = buildKnowledgeGraph(filteredPosts);
-  if (selNodeType !== "all") {
-    activeGraph = filterGraphByNodeType(activeGraph, selNodeType);
-  }
+  activeGraph = filterGraphByNodeTypes(activeGraph, selectedNodeTypes);
 
   // Verify activeGraph matches baseGraph completely
   assert.equal(activeGraph.nodes.length, baseGraph.nodes.length);
@@ -750,4 +766,184 @@ test("ForceLayout - large graph remains numerically stable at maximum expanded p
     assert.ok(node.x > -5000 && node.x < 6500, `Node ${node.id} x out of bounds: ${node.x}`);
     assert.ok(node.y > -5000 && node.y < 6000, `Node ${node.id} y out of bounds: ${node.y}`);
   }
+});
+
+// =========================================================================
+// MULTI-SELECT KNOWLEDGE GRAPH FILTERING REGRESSION TESTS
+// =========================================================================
+
+test("filterGraphByNodeTypes - supports multi-select combinations and eliminates dangling edges", () => {
+  const mockPosts = [
+    {
+      id: "post:1",
+      text: "Machine learning post",
+      author: "Alice",
+      topics: ["AI", "ML"],
+    },
+    {
+      id: "post:2",
+      text: "Robotics and control systems",
+      author: "Bob",
+      topics: ["Robotics", "Systems"],
+    },
+  ];
+
+  const fullGraph = buildKnowledgeGraph(mockPosts);
+  // fullGraph has 2 posts + 4 topics (AI, ML, Robotics, Systems) + 2 authors (Alice, Bob) = 8 nodes
+  assert.equal(fullGraph.nodes.length, 8);
+  assert.equal(fullGraph.edges.length, 6); // 4 has-topic + 2 written-by
+
+  // 1. Empty / "all" => returns all node types
+  const all1 = filterGraphByNodeTypes(fullGraph, "all");
+  assert.equal(all1.nodes.length, 8);
+  assert.equal(all1.edges.length, 6);
+
+  const all2 = filterGraphByNodeTypes(fullGraph, []);
+  assert.equal(all2.nodes.length, 8);
+  assert.equal(all2.edges.length, 6);
+
+  const all3 = filterGraphByNodeTypes(fullGraph, ["post", "topic", "author"]);
+  assert.equal(all3.nodes.length, 8);
+  assert.equal(all3.edges.length, 6);
+
+  // 2. Posts only
+  const postsOnly = filterGraphByNodeTypes(fullGraph, ["post"]);
+  assert.equal(postsOnly.nodes.length, 2);
+  assert.ok(postsOnly.nodes.every((n) => n.type === "post"));
+  assert.equal(postsOnly.edges.length, 0, "No dangling edges when only posts are shown");
+
+  // 3. Topics only
+  const topicsOnly = filterGraphByNodeTypes(fullGraph, ["topic"]);
+  assert.equal(topicsOnly.nodes.length, 4);
+  assert.ok(topicsOnly.nodes.every((n) => n.type === "topic"));
+  assert.equal(topicsOnly.edges.length, 0);
+
+  // 4. Authors only
+  const authorsOnly = filterGraphByNodeTypes(fullGraph, ["author"]);
+  assert.equal(authorsOnly.nodes.length, 2);
+  assert.ok(authorsOnly.nodes.every((n) => n.type === "author"));
+  assert.equal(authorsOnly.edges.length, 0);
+
+  // 5. Posts + Topics
+  const postsAndTopics = filterGraphByNodeTypes(fullGraph, ["post", "topic"]);
+  assert.equal(postsAndTopics.nodes.length, 6); // 2 posts + 4 topics
+  assert.ok(postsAndTopics.nodes.every((n) => n.type === "post" || n.type === "topic"));
+  assert.equal(postsAndTopics.edges.length, 4, "Only has-topic edges should remain");
+  assert.ok(postsAndTopics.edges.every((e) => e.type === "has-topic"));
+
+  // 6. Topics + Authors (no direct edges between topics and authors in this topology)
+  const topicsAndAuthors = filterGraphByNodeTypes(fullGraph, ["topic", "author"]);
+  assert.equal(topicsAndAuthors.nodes.length, 6); // 4 topics + 2 authors
+  assert.equal(topicsAndAuthors.edges.length, 0);
+
+  // 7. Posts + Authors
+  const postsAndAuthors = filterGraphByNodeTypes(fullGraph, ["post", "author"]);
+  assert.equal(postsAndAuthors.nodes.length, 4); // 2 posts + 2 authors
+  assert.equal(postsAndAuthors.edges.length, 2, "Only written-by edges should remain");
+  assert.ok(postsAndAuthors.edges.every((e) => e.type === "written-by"));
+});
+
+test("filterPostsByTopics - multi-select logical OR, case-insensitivity, and empty semantics", () => {
+  const mockPosts = [
+    { id: "1", text: "AI post", author: "Alice", topics: ["AI", "Algorithms"] },
+    { id: "2", text: "Robotics post", author: "Bob", topics: ["Robotics", "Hardware"] },
+    { id: "3", text: "Systems post", author: "Charlie", topics: ["Systems", "Linux"] },
+  ];
+
+  // 1. Empty / null selection => all posts
+  assert.equal(filterPostsByTopics(mockPosts, []).length, 3);
+  assert.equal(filterPostsByTopics(mockPosts, null).length, 3);
+  assert.equal(filterPostsByTopics(mockPosts, new Set()).length, 3);
+
+  // 2. Single topic
+  const single = filterPostsByTopics(mockPosts, ["ai"]);
+  assert.equal(single.length, 1);
+  assert.equal(single[0].id, "1");
+
+  // 3. Multiple topics (logical OR)
+  const multi = filterPostsByTopics(mockPosts, ["AI", "Robotics"]);
+  assert.equal(multi.length, 2);
+  assert.equal(multi[0].id, "1");
+  assert.equal(multi[1].id, "2");
+
+  // 4. Case-insensitivity & whitespace trimming
+  const caseInsensitive = filterPostsByTopics(mockPosts, ["  rObOtIcS  ", "  sYsTeMs  "]);
+  assert.equal(caseInsensitive.length, 2);
+  assert.equal(caseInsensitive[0].id, "2");
+  assert.equal(caseInsensitive[1].id, "3");
+
+  // 5. Non-existent topic
+  const none = filterPostsByTopics(mockPosts, ["QuantumComputing"]);
+  assert.equal(none.length, 0);
+});
+
+test("filterPostsByAuthors - multi-select logical OR, case-insensitivity, and empty semantics", () => {
+  const mockPosts = [
+    { id: "1", text: "Post 1", author: "Alice Smith", topics: ["AI"] },
+    { id: "2", text: "Post 2", author: "Bob Jones", topics: ["Robotics"] },
+    { id: "3", text: "Post 3", author: "Charlie Brown", topics: ["Systems"] },
+  ];
+
+  // 1. Empty / null selection => all posts
+  assert.equal(filterPostsByAuthors(mockPosts, []).length, 3);
+  assert.equal(filterPostsByAuthors(mockPosts, null).length, 3);
+  assert.equal(filterPostsByAuthors(mockPosts, new Set()).length, 3);
+
+  // 2. Single author
+  const single = filterPostsByAuthors(mockPosts, ["alice smith"]);
+  assert.equal(single.length, 1);
+  assert.equal(single[0].id, "1");
+
+  // 3. Multiple authors (logical OR)
+  const multi = filterPostsByAuthors(mockPosts, ["Alice Smith", "Charlie Brown"]);
+  assert.equal(multi.length, 2);
+  assert.equal(multi[0].id, "1");
+  assert.equal(multi[1].id, "3");
+
+  // 4. Case-insensitivity & whitespace trimming
+  const caseInsensitive = filterPostsByAuthors(mockPosts, ["  bOb jOnEs  "]);
+  assert.equal(caseInsensitive.length, 1);
+  assert.equal(caseInsensitive[0].id, "2");
+
+  // 5. Non-existent author
+  const none = filterPostsByAuthors(mockPosts, ["David"]);
+  assert.equal(none.length, 0);
+});
+
+test("Combined Filters & Search - Logical composition across groups with search AND constraint", () => {
+  const mockPosts = [
+    { id: "1", text: "AI and neural models", author: "Alice", topics: ["AI", "Deep Learning"] },
+    { id: "2", text: "Robotics kinematics", author: "Alice", topics: ["Robotics"] },
+    { id: "3", text: "AI vision in robotics", author: "Bob", topics: ["AI", "Robotics"] },
+    { id: "4", text: "Cloud storage infrastructure", author: "Charlie", topics: ["Cloud", "Storage"] },
+  ];
+
+  // Filter 1: Topics = {AI, Robotics}
+  const byTopic = filterPostsByTopics(mockPosts, ["AI", "Robotics"]);
+  assert.equal(byTopic.length, 3); // 1, 2, 3
+
+  // Filter 2: Authors = {Alice}
+  const byAuthor = filterPostsByAuthors(byTopic, ["Alice"]);
+  assert.equal(byAuthor.length, 2); // 1, 2
+
+  // Filter 3: Search Query = "neural"
+  const searchQuery = "neural";
+  const searchFiltered = byAuthor.filter((p) =>
+    p.text.toLowerCase().includes(searchQuery) ||
+    p.author.toLowerCase().includes(searchQuery) ||
+    p.topics.some((t) => t.toLowerCase().includes(searchQuery))
+  );
+  assert.equal(searchFiltered.length, 1);
+  assert.equal(searchFiltered[0].id, "1");
+
+  // Build graph from final filtered posts
+  const graph = buildKnowledgeGraph(searchFiltered);
+  // Post 1 has topics [AI, Deep Learning] and author Alice => 4 nodes
+  assert.equal(graph.nodes.length, 4);
+
+  // Filter Node Types = {post, topic}
+  const nodeTypeGraph = filterGraphByNodeTypes(graph, ["post", "topic"]);
+  assert.equal(nodeTypeGraph.nodes.length, 3); // 1 post + 2 topics
+  assert.equal(nodeTypeGraph.edges.length, 2); // 2 has-topic edges
+  assert.ok(nodeTypeGraph.nodes.every((n) => n.type !== "author"));
 });

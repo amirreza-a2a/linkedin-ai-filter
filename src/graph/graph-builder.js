@@ -133,28 +133,109 @@ export function buildKnowledgeGraph(savedPosts) {
 }
 
 /**
- * Filters a graph by node type while eliminating dangling edges.
+ * Filters an array of SavedPost objects by one or more selected topics (logical OR).
+ * If selectedTopics is empty or null, returns all posts (no topic restriction).
+ *
+ * @param {Array<Object>} posts
+ * @param {Array<string>|Set<string>|null} selectedTopics
+ * @returns {Array<Object>}
+ */
+export function filterPostsByTopics(posts, selectedTopics) {
+  if (!Array.isArray(posts)) return [];
+  if (
+    !selectedTopics ||
+    (Array.isArray(selectedTopics) && selectedTopics.length === 0) ||
+    (selectedTopics instanceof Set && selectedTopics.size === 0)
+  ) {
+    return posts;
+  }
+
+  const topicSet = new Set(
+    (Array.isArray(selectedTopics) ? selectedTopics : Array.from(selectedTopics))
+      .filter((t) => typeof t === "string" && t.trim())
+      .map((t) => t.trim().toLowerCase())
+  );
+
+  if (topicSet.size === 0) return posts;
+
+  return posts.filter((p) => {
+    if (!p || !Array.isArray(p.topics)) return false;
+    return p.topics.some((t) => typeof t === "string" && topicSet.has(t.trim().toLowerCase()));
+  });
+}
+
+/**
+ * Filters an array of SavedPost objects by one or more selected authors (logical OR).
+ * If selectedAuthors is empty or null, returns all posts (no author restriction).
+ *
+ * @param {Array<Object>} posts
+ * @param {Array<string>|Set<string>|null} selectedAuthors
+ * @returns {Array<Object>}
+ */
+export function filterPostsByAuthors(posts, selectedAuthors) {
+  if (!Array.isArray(posts)) return [];
+  if (
+    !selectedAuthors ||
+    (Array.isArray(selectedAuthors) && selectedAuthors.length === 0) ||
+    (selectedAuthors instanceof Set && selectedAuthors.size === 0)
+  ) {
+    return posts;
+  }
+
+  const authorSet = new Set(
+    (Array.isArray(selectedAuthors) ? selectedAuthors : Array.from(selectedAuthors))
+      .filter((a) => typeof a === "string" && a.trim())
+      .map((a) => a.trim().toLowerCase())
+  );
+
+  if (authorSet.size === 0) return posts;
+
+  return posts.filter((p) => {
+    if (!p || typeof p.author !== "string") return false;
+    return authorSet.has(p.author.trim().toLowerCase());
+  });
+}
+
+/**
+ * Filters a Knowledge Graph by one or more allowed node types (e.g. ['post', 'topic'])
+ * while eliminating dangling edges.
  *
  * @param {{ nodes: Array<Object>, edges: Array<Object> }} graph
- * @param {"all" | "posts" | "topics" | "authors"} nodeTypeFilter
+ * @param {Array<string>|Set<string>|string} selectedTypes - Array/Set of types or single string
  * @returns {{ nodes: Array<Object>, edges: Array<Object> }}
  */
-export function filterGraphByNodeType(graph, nodeTypeFilter = "all") {
+export function filterGraphByNodeTypes(graph, selectedTypes = "all") {
   if (!graph || !Array.isArray(graph.nodes)) {
     return { nodes: [], edges: [] };
   }
 
-  const type = String(nodeTypeFilter || "all").toLowerCase();
-  if (type === "all") {
+  let allowedTypesSet;
+  if (typeof selectedTypes === "string") {
+    const str = selectedTypes.trim().toLowerCase();
+    if (str === "all" || !str) return graph;
+    if (str === "posts" || str === "post") allowedTypesSet = new Set(["post"]);
+    else if (str === "topics" || str === "topic") allowedTypesSet = new Set(["topic"]);
+    else if (str === "authors" || str === "author") allowedTypesSet = new Set(["author"]);
+    else return graph;
+  } else if (Array.isArray(selectedTypes) || selectedTypes instanceof Set) {
+    const raw = Array.isArray(selectedTypes) ? selectedTypes : Array.from(selectedTypes);
+    if (raw.length === 0) return graph;
+    allowedTypesSet = new Set();
+    for (const t of raw) {
+      if (typeof t !== "string") continue;
+      const clean = t.trim().toLowerCase();
+      if (clean === "posts" || clean === "post") allowedTypesSet.add("post");
+      else if (clean === "topics" || clean === "topic") allowedTypesSet.add("topic");
+      else if (clean === "authors" || clean === "author") allowedTypesSet.add("author");
+    }
+    if (allowedTypesSet.size === 0 || allowedTypesSet.size === 3) {
+      return graph; // "all" or empty means all node types enabled
+    }
+  } else {
     return graph;
   }
 
-  const allowedType = type === "posts" ? "post" : type === "topics" ? "topic" : type === "authors" ? "author" : null;
-  if (!allowedType) {
-    return graph;
-  }
-
-  const filteredNodes = graph.nodes.filter((n) => n.type === allowedType);
+  const filteredNodes = graph.nodes.filter((n) => allowedTypesSet.has(n.type));
   const nodeIds = new Set(filteredNodes.map((n) => n.id));
 
   // Retain only edges where BOTH source and target exist in the filtered node set
@@ -163,6 +244,18 @@ export function filterGraphByNodeType(graph, nodeTypeFilter = "all") {
   );
 
   return { nodes: filteredNodes, edges: filteredEdges };
+}
+
+/**
+ * Filters a graph by a single node type while eliminating dangling edges.
+ * (Backward-compatible alias for filterGraphByNodeTypes)
+ *
+ * @param {{ nodes: Array<Object>, edges: Array<Object> }} graph
+ * @param {"all" | "posts" | "topics" | "authors"} nodeTypeFilter
+ * @returns {{ nodes: Array<Object>, edges: Array<Object> }}
+ */
+export function filterGraphByNodeType(graph, nodeTypeFilter = "all") {
+  return filterGraphByNodeTypes(graph, nodeTypeFilter);
 }
 
 /**

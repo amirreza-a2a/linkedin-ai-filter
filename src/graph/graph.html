@@ -312,6 +312,142 @@
       z-index: 9;
     }
 
+    /* Multi-select filter popovers */
+    .multiselect-dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .multiselect-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      background: white;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      color: #334155;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all .15s;
+    }
+    .multiselect-trigger:hover, .multiselect-trigger.active {
+      border-color: #0a66c2;
+      background: #f8fafc;
+    }
+    .multiselect-trigger .arrow {
+      font-size: 10px;
+      color: #64748b;
+      transition: transform .15s;
+    }
+    .multiselect-dropdown.open .multiselect-trigger .arrow {
+      transform: rotate(180deg);
+    }
+    .multiselect-popover {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 220px;
+      max-width: 300px;
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      z-index: 50;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      animation: popoverFadeIn 0.12s ease-out;
+    }
+    @keyframes popoverFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .multiselect-dropdown.open .multiselect-popover {
+      display: flex;
+    }
+    .multiselect-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #475569;
+    }
+    .multiselect-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #0a66c2;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .link-btn:hover {
+      color: #004182;
+    }
+    .multiselect-search-box {
+      padding: 6px 10px;
+      border-bottom: 1px solid #f1f5f9;
+      background: #ffffff;
+    }
+    .multiselect-search-box input {
+      width: 100%;
+      padding: 5px 8px;
+      font-size: 11.5px;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      outline: none;
+    }
+    .multiselect-search-box input:focus {
+      border-color: #0a66c2;
+    }
+    .multiselect-options {
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .multiselect-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #1e293b;
+      cursor: pointer;
+      user-select: none;
+      transition: background .12s;
+    }
+    .multiselect-option:hover {
+      background: #f1f5f9;
+    }
+    .multiselect-option input[type="checkbox"] {
+      accent-color: #0a66c2;
+      cursor: pointer;
+    }
+    .multiselect-empty {
+      padding: 12px;
+      text-align: center;
+      font-size: 11.5px;
+      color: #94a3b8;
+    }
+    .option-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
     /* Responsive adjustments for < 900px */
     @media (max-width: 900px) {
       .sidebar {
@@ -344,26 +480,85 @@
   </header>
 
   <div class="filter-toolbar">
-    <label>Topic:
-      <select id="topicFilterSelect">
-        <option value="">All Topics</option>
-      </select>
-    </label>
-    <label>Author:
-      <select id="authorFilterSelect">
-        <option value="">All Authors</option>
-      </select>
-    </label>
-    <label>Show:
-      <select id="nodeTypeSelect">
-        <option value="all">All Nodes</option>
-        <option value="posts">Posts only</option>
-        <option value="topics">Topics only</option>
-        <option value="authors">Authors only</option>
-      </select>
-    </label>
+    <!-- Node Types Filter Dropdown -->
+    <div class="multiselect-dropdown" id="nodeTypeDropdown">
+      <button type="button" class="multiselect-trigger" id="nodeTypeTrigger">
+        <span id="nodeTypeSummary">Node Types: All</span>
+        <span class="arrow">▾</span>
+      </button>
+      <div class="multiselect-popover" id="nodeTypePopover">
+        <div class="multiselect-header">
+          <span>Node Types</span>
+          <div class="multiselect-actions">
+            <button type="button" class="link-btn" id="nodeTypeSelectAll">All</button>
+            <button type="button" class="link-btn" id="nodeTypeClear">Clear</button>
+          </div>
+        </div>
+        <div class="multiselect-options" id="nodeTypeOptions">
+          <label class="multiselect-option">
+            <input type="checkbox" value="post" checked />
+            <span class="option-dot dot-post"></span> Posts
+          </label>
+          <label class="multiselect-option">
+            <input type="checkbox" value="topic" checked />
+            <span class="option-dot dot-topic"></span> Topics
+          </label>
+          <label class="multiselect-option">
+            <input type="checkbox" value="author" checked />
+            <span class="option-dot dot-author"></span> Authors
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Topics Filter Dropdown -->
+    <div class="multiselect-dropdown" id="topicDropdown">
+      <button type="button" class="multiselect-trigger" id="topicTrigger">
+        <span id="topicSummary">Topics: All</span>
+        <span class="arrow">▾</span>
+      </button>
+      <div class="multiselect-popover" id="topicPopover">
+        <div class="multiselect-header">
+          <span>Topics</span>
+          <div class="multiselect-actions">
+            <button type="button" class="link-btn" id="topicSelectAll">All</button>
+            <button type="button" class="link-btn" id="topicClear">Clear</button>
+          </div>
+        </div>
+        <div class="multiselect-search-box">
+          <input type="text" id="topicSearchInput" placeholder="Search topics..." />
+        </div>
+        <div class="multiselect-options" id="topicOptions">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Authors Filter Dropdown -->
+    <div class="multiselect-dropdown" id="authorDropdown">
+      <button type="button" class="multiselect-trigger" id="authorTrigger">
+        <span id="authorSummary">Authors: All</span>
+        <span class="arrow">▾</span>
+      </button>
+      <div class="multiselect-popover" id="authorPopover">
+        <div class="multiselect-header">
+          <span>Authors</span>
+          <div class="multiselect-actions">
+            <button type="button" class="link-btn" id="authorSelectAll">All</button>
+            <button type="button" class="link-btn" id="authorClear">Clear</button>
+          </div>
+        </div>
+        <div class="multiselect-search-box">
+          <input type="text" id="authorSearchInput" placeholder="Search authors..." />
+        </div>
+        <div class="multiselect-options" id="authorOptions">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
     <input type="text" id="searchGraph" placeholder="Label substring search..." />
-    <button class="btn btn-secondary btn-sm" id="clearFiltersBtn">Clear Filters</button>
+    <button type="button" class="btn btn-secondary btn-sm" id="clearFiltersBtn">Clear Filters</button>
   </div>
 
   <div class="focus-banner" id="focusBanner">
