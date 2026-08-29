@@ -3,14 +3,11 @@
 
 import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
+import { logger, isDebugEnabled } from "../utils/logger.js";
 
-console.log("[FeedRule] content script module loaded on", typeof location !== "undefined" ? location.href : "");
+logger.debug("CONTENT", "content script module loaded on", typeof location !== "undefined" ? location.href : "");
 
 const HIDDEN_CLASS = "feedrule-hidden";
-
-// Debug instrumentation flag (can be enabled via window.__FEEDRULE_DEBUG__ = true)
-export const isDebugEnabled = () =>
-  typeof window !== "undefined" && Boolean(window.__FEEDRULE_DEBUG__);
 
 const COMBINED_CONTAINER_SELECTOR = [
   "div.feed-shared-update-v2",
@@ -225,14 +222,15 @@ function sendBatchMessage(batch, callback) {
       },
       (response) => {
         if (chrome.runtime.lastError) {
-          console.warn(
-            "[FeedRule] background message status:",
+          logger.warn(
+            "CONTENT",
+            "background message status:",
             chrome.runtime.lastError.message
           );
           callback();
           return;
         }
-        console.log("[FeedRule] got response from background:", response);
+        logger.debug("CONTENT", "got response from background:", response);
         const results = response?.results || [];
         for (const decision of results) {
           const el = elementById.get(decision.id);
@@ -242,7 +240,7 @@ function sendBatchMessage(batch, callback) {
       }
     );
   } catch (err) {
-    console.warn("[FeedRule] extension context disconnected:", err);
+    logger.warn("CONTENT", "extension context disconnected:", err);
     callback();
   }
 }
@@ -258,13 +256,13 @@ async function processQueue() {
         try {
           sendBatchMessage(nextBatch, resolve);
         } catch (sendErr) {
-          console.error("[FeedRule] sendBatchMessage failed:", sendErr);
+          logger.error("CONTENT", "sendBatchMessage failed:", sendErr);
           resolve();
         }
       });
     }
   } catch (err) {
-    console.error("[FeedRule] unexpected error in processQueue:", err);
+    logger.error("CONTENT", "unexpected error in processQueue:", err);
   } finally {
     isProcessingQueue = false;
     if (batchQueue.length > 0) {
@@ -293,8 +291,9 @@ export function scan(root) {
 
     if (isDebugEnabled()) {
       const sigs = qual.signals || {};
-      console.log(
-        `[FeedRule] CANDIDATE\n` +
+      logger.debug(
+        "CONTENT",
+        `CANDIDATE\n` +
           `class=${node.getAttribute?.("class") || ""}\n` +
           `urn=${Boolean(sigs.urn)} permalink=${Boolean(sigs.permalink)} actor=${Boolean(sigs.actor)} text=${Boolean(sigs.text)} authorLink=${Boolean(sigs.authorLink)}\n` +
           `score=${qual.score} decision=${qual.decision} reason=${qual.reason}`
@@ -309,12 +308,12 @@ export function scan(root) {
     const post = extractPost(node);
     if (post) {
       if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
-        console.log(`[FeedRule] AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
+        logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
       }
       pending.push(post);
     } else {
       if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
-        console.log(`[FeedRule] AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
+        logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
       }
     }
   }
@@ -356,9 +355,9 @@ export function processMutationQueue() {
 }
 
 if (typeof document !== "undefined") {
-  console.log("[FeedRule] running initial scan...");
+  logger.debug("CONTENT", "running initial scan...");
   scan(document.body);
-  console.log(`[FeedRule] initial scan found ${pending.length} post(s) pending`);
+  logger.debug("CONTENT", `initial scan found ${pending.length} post(s) pending`);
   clearTimeout(flushTimer);
   flushTimer = setTimeout(flush, 0);
 
@@ -378,5 +377,5 @@ if (typeof document !== "undefined") {
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
-  console.log("[FeedRule] MutationObserver attached, watching for new posts with coalesced buffer");
+  logger.debug("CONTENT", "MutationObserver attached, watching for new posts with coalesced buffer");
 }

@@ -7,6 +7,7 @@ import {
   clearClassificationCache,
   clearAllLocalData,
 } from "../storage/data-management.js";
+import { logger } from "../utils/logger.js";
 
 const els = {
   provider: document.getElementById("provider"),
@@ -110,7 +111,7 @@ document.getElementById("save").addEventListener("click", async () => {
           }
         }
       } catch (permErr) {
-        console.warn("[FeedRule] Runtime permission error:", permErr);
+        logger.warn("OPTIONS", "Runtime permission error:", permErr);
       }
     }
   }
@@ -150,7 +151,7 @@ if (els.clearSavedBtn) {
       await clearSavedPostsData();
       setDataStatus("Second Brain cleared ✓");
     } catch (err) {
-      console.error("[FeedRule] Failed to clear saved posts:", err);
+      logger.error("OPTIONS", "Failed to clear saved posts:", err);
       setDataStatus("Failed to clear Second Brain.", true);
     }
   });
@@ -166,7 +167,7 @@ if (els.clearLogBtn) {
       await clearDecisionLogData();
       setDataStatus("Decision log cleared ✓");
     } catch (err) {
-      console.error("[FeedRule] Failed to clear decision log:", err);
+      logger.error("OPTIONS", "Failed to clear decision log:", err);
       setDataStatus("Failed to clear decision log.", true);
     }
   });
@@ -182,7 +183,7 @@ if (els.clearCacheBtn) {
       const count = await clearClassificationCache();
       setDataStatus(`Classification cache cleared (${count} entries removed) ✓`);
     } catch (err) {
-      console.error("[FeedRule] Failed to clear cache:", err);
+      logger.error("OPTIONS", "Failed to clear cache:", err);
       setDataStatus("Failed to clear classification cache.", true);
     }
   });
@@ -199,7 +200,7 @@ if (els.clearAllBtn) {
       await load();
       setDataStatus("All local FeedRule data cleared ✓");
     } catch (err) {
-      console.error("[FeedRule] Failed to clear all local data:", err);
+      logger.error("OPTIONS", "Failed to clear all local data:", err);
       setDataStatus("Failed to clear all local data.", true);
     }
   });

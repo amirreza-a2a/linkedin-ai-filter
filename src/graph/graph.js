@@ -812,21 +812,19 @@ if (toggleSidebarBtn) {
 }
 
 if (openBrainBtn) {
-  console.log("[FeedRule][NAV] listener registered for #openBrainBtn in graph.js");
   openBrainBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log("[FeedRule][NAV] click intercepted on #openBrainBtn, preventDefault executed");
+    logger.debug("NAV", "Graph navigating to saved");
     await openExtensionPage("saved");
   });
 }
 
 if (openDashboardBtn) {
-  console.log("[FeedRule][NAV] listener registered for #openDashboardBtn in graph.js");
   openDashboardBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log("[FeedRule][NAV] click intercepted on #openDashboardBtn, preventDefault executed");
+    logger.debug("NAV", "Graph navigating to dashboard");
     await openExtensionPage("dashboard");
   });
 }

@@ -17,6 +17,7 @@ import {
   getSavedPosts,
   isPostSaved,
 } from "../storage/saved-posts-store.js";
+import { logger } from "../utils/logger.js";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
@@ -29,11 +30,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           try {
             sendResponse({ ok: true, results });
           } catch (err) {
-            console.warn("[FeedRule] sendResponse failed:", err);
+            logger.warn("SW", "sendResponse failed:", err);
           }
         })
         .catch((err) => {
-          console.error("[FeedRule] classify failed:", err);
+          logger.error("SW", "classify failed:", err);
           try {
             sendResponse({
               ok: false,
@@ -49,7 +50,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               })),
             });
           } catch (sendErr) {
-            console.warn("[FeedRule] sendResponse catch failed:", sendErr);
+            logger.warn("SW", "sendResponse catch failed:", sendErr);
           }
         });
       return true; // keep channel open
