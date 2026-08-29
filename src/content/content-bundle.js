@@ -729,6 +729,15 @@
     "footer",
   ].join(", ");
   
+  const FEED_ROOT_SELECTORS = [
+    "main.scaffold-layout__main",
+    "div[data-testid='mainFeed']",
+    ".scaffold-finite-scroll",
+    ".scaffold-finite-scroll__content",
+    "div.core-rail",
+    "main[role='main']",
+  ];
+  
   const TEXT_CANDIDATES = [
     '[data-testid="expandable-text-box"]',
     ".feed-shared-update-v2__description",
@@ -767,6 +776,15 @@
     classificationDispatches: 0,
     mutationQueueMaxSize: 0,
     inFlightElementMaxSize: 0,
+    observerAttachCount: 0,
+    observerDisconnectCount: 0,
+    currentObserverAttached: 0,
+    feedRootChanges: 0,
+    feedRootResolutionAttempts: 0,
+    mutationProcessingTimeMs: 0,
+    maxMutationProcessingTimeMs: 0,
+    scanProcessingTimeMs: 0,
+    maxScanProcessingTimeMs: 0,
     startTime: typeof Date !== "undefined" ? Date.now() : 0,
   };
   
@@ -788,6 +806,15 @@
     performanceStats.classificationDispatches = 0;
     performanceStats.mutationQueueMaxSize = 0;
     performanceStats.inFlightElementMaxSize = 0;
+    performanceStats.observerAttachCount = 0;
+    performanceStats.observerDisconnectCount = 0;
+    performanceStats.currentObserverAttached = 0;
+    performanceStats.feedRootChanges = 0;
+    performanceStats.feedRootResolutionAttempts = 0;
+    performanceStats.mutationProcessingTimeMs = 0;
+    performanceStats.maxMutationProcessingTimeMs = 0;
+    performanceStats.scanProcessingTimeMs = 0;
+    performanceStats.maxScanProcessingTimeMs = 0;
     performanceStats.startTime = Date.now();
   }
   
@@ -816,7 +843,7 @@
   const processedVideos = new WeakSet();
   
   /**
-   * Helper to pause any active video playback within a hidden post container.
+   * Helper to pause any active video playback within a container.
    * Uses WeakSet caching to avoid repeated calls on already-paused video elements.
    *
    * @param {Element|Object} container
@@ -884,6 +911,15 @@
       node.getAttribute?.("data-testid") === "mainFeed" ||
       node.classList?.contains?.("core-rail")
     );
+  }
+  
+  function findFeedRoot(doc = typeof document !== "undefined" ? document : null) {
+    if (!doc || typeof doc.querySelector !== "function") return null;
+    for (const sel of FEED_ROOT_SELECTORS) {
+      const root = doc.querySelector(sel);
+      if (root) return root;
+    }
+    return null;
   }
   
   /**
@@ -1258,6 +1294,7 @@
    * @param {Element|Object} root
    */
   function scan(root) {
+    const scanStart = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
     performanceStats.scanCalls++;
     const nodes = findContainers(root);
   
@@ -1355,6 +1392,12 @@
       elementById.set(post.id, node);
       pending.push(post);
     }
+  
+    const scanElapsed = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - scanStart;
+    performanceStats.scanProcessingTimeMs += scanElapsed;
+    if (scanElapsed > performanceStats.maxScanProcessingTimeMs) {
+      performanceStats.maxScanProcessingTimeMs = scanElapsed;
+    }
   }
   
   // --- Coalesced MutationObserver Processing ---------------------------
@@ -1394,15 +1437,16 @@
   
   /**
    * Centralized MutationObserver handler.
-   * High-performance routed pipeline:
+   * High-performance 3-way routed pipeline:
    * 1. Scope filter drops non-feed mutations (chat, nav, sidebars) immediately.
-   * 2. Class mutations on hidden posts trigger synchronous presentation enforcement without queueing.
+   * 2. Class mutations on hidden posts trigger synchronous presentation enforcement without full-container video queries or queueing.
    * 3. Identity mutations (data-urn) trigger post container recycling / re-evaluation.
-   * 4. Child additions queue only verified post containers or feed sections.
+   * 4. Child additions queue only verified post containers or feed sections, and pause newly added videos directly.
    *
    * @param {MutationRecord[]} mutations
    */
   function handleMutations(mutations) {
+    const mutStart = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
     performanceStats.mutationCallbacks++;
     let sawAdditions = false;
   
@@ -1416,11 +1460,11 @@
         continue;
       }
   
+      // BRANCH 1: Presentation Attribute (class)
       if (m.type === "attributes") {
         performanceStats.attributeMutations++;
         const attrName = m.attributeName;
   
-        // Case A: Presentation Attribute (class)
         if (attrName === "class") {
           performanceStats.classMutations++;
           // Resolve enclosing container
@@ -1445,7 +1489,7 @@
               if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
                 enclosing.setAttribute?.("data-feedrule-hidden", "true");
               }
-              pauseVideosInContainer(enclosing);
+              // Invariant: Do NOT execute pauseVideosInContainer on class mutations (zero full-tree traversals)
             }
             // Class mutation on an already-classified post never triggers a scan
             performanceStats.ignoredMutations++;
@@ -1457,7 +1501,7 @@
           continue;
         }
   
-        // Case B: Identity Attributes (data-urn, data-id, data-chameleon-urn)
+        // BRANCH 2: Identity Attributes (data-urn, data-id, data-chameleon-urn)
         if (attrName === "data-urn" || attrName === "data-id" || attrName === "data-chameleon-urn") {
           performanceStats.identityMutations++;
           const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
@@ -1473,7 +1517,7 @@
         continue;
       }
   
-      // Case C: ChildList Mutations
+      // BRANCH 3: ChildList Mutations
       if (m.type === "childList") {
         performanceStats.childListMutations++;
         for (const node of m.addedNodes || []) {
@@ -1502,10 +1546,10 @@
                 if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
                   enclosing.setAttribute?.("data-feedrule-hidden", "true");
                 }
-                // If added node is or contains video, pause directly
+                // Localized video pause: only inspect newly inserted node/subtree, NEVER whole post container!
                 if (node.tagName === "VIDEO") {
                   pauseSingleVideo(node);
-                } else {
+                } else if (typeof node.querySelectorAll === "function") {
                   pauseVideosInContainer(node);
                 }
                 performanceStats.ignoredMutations++;
@@ -1543,34 +1587,113 @@
       performanceStats.mutationQueueMaxSize = mutationQueue.size;
     }
   
+    const mutElapsed = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - mutStart;
+    performanceStats.mutationProcessingTimeMs += mutElapsed;
+    if (mutElapsed > performanceStats.maxMutationProcessingTimeMs) {
+      performanceStats.maxMutationProcessingTimeMs = mutElapsed;
+    }
+  
     if (sawAdditions) {
       clearTimeout(mutationTimer);
       mutationTimer = setTimeout(processMutationQueue, MUTATION_BUFFER_MS);
     }
   }
   
+  // --- Observer Lifecycle Management (Dynamic feed root & SPA replacement) ---
+  let currentFeedObserver = null;
+  let currentObservedFeedRoot = null;
+  let feedRootPollTimer = null;
+  
+  function attachFeedObserver(feedRoot) {
+    if (!feedRoot) return false;
+    performanceStats.feedRootResolutionAttempts++;
+  
+    // If already observing this exact feed root, do not duplicate
+    if (currentObservedFeedRoot === feedRoot && currentFeedObserver) {
+      return true;
+    }
+  
+    // If observing a different root, disconnect it first (feed root replacement in SPA)
+    if (currentFeedObserver) {
+      currentFeedObserver.disconnect();
+      performanceStats.observerDisconnectCount++;
+      performanceStats.currentObserverAttached = 0;
+      performanceStats.feedRootChanges++;
+      currentFeedObserver = null;
+      currentObservedFeedRoot = null;
+    }
+  
+    try {
+      currentFeedObserver = new MutationObserver(handleMutations);
+      currentFeedObserver.observe(feedRoot, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
+      });
+  
+      currentObservedFeedRoot = feedRoot;
+      performanceStats.observerAttachCount++;
+      performanceStats.currentObserverAttached = 1;
+  
+      // Scan initial posts in this feed root
+      scan(feedRoot);
+      if (pending.length > 0) {
+        clearTimeout(flushTimer);
+        flushTimer = setTimeout(flush, 0);
+      }
+      return true;
+    } catch (err) {
+      logger.warn("CONTENT", "failed to attach feed observer:", err);
+      return false;
+    }
+  }
+  
+  function disconnectFeedObserver() {
+    if (currentFeedObserver) {
+      currentFeedObserver.disconnect();
+      performanceStats.observerDisconnectCount++;
+      performanceStats.currentObserverAttached = 0;
+      currentFeedObserver = null;
+      currentObservedFeedRoot = null;
+    }
+    if (feedRootPollTimer) {
+      clearInterval(feedRootPollTimer);
+      feedRootPollTimer = null;
+    }
+  }
+  
+  function initFeedObserver(doc = typeof document !== "undefined" ? document : null) {
+    if (!doc) return;
+  
+    const root = findFeedRoot(doc);
+    if (root) {
+      attachFeedObserver(root);
+      return;
+    }
+  
+    // Bounded retry polling (check every 250ms up to 20 times = 5s)
+    let attempts = 0;
+    const maxAttempts = 20;
+    if (feedRootPollTimer) clearInterval(feedRootPollTimer);
+  
+    feedRootPollTimer = setInterval(() => {
+      attempts++;
+      performanceStats.feedRootResolutionAttempts++;
+      const found = findFeedRoot(doc);
+      if (found) {
+        clearInterval(feedRootPollTimer);
+        feedRootPollTimer = null;
+        attachFeedObserver(found);
+      } else if (attempts >= maxAttempts) {
+        clearInterval(feedRootPollTimer);
+        feedRootPollTimer = null;
+        logger.debug("CONTENT", "feed root not found within bounded initialization window");
+      }
+    }, 250);
+  }
+  
   if (typeof document !== "undefined") {
-    logger.debug("CONTENT", "running initial scan...");
-    scan(document.body);
-    logger.debug("CONTENT", `initial scan found ${pending.length} post(s) pending`);
-    clearTimeout(flushTimer);
-    flushTimer = setTimeout(flush, 0);
-  
-    // Dynamic feed root resolution: attach to feed root if available, otherwise document.body
-    const feedRoot =
-      document.querySelector("main.scaffold-layout__main") ||
-      document.querySelector("div[data-testid='mainFeed']") ||
-      document.querySelector(".scaffold-finite-scroll") ||
-      document.body;
-  
-    const observer = new MutationObserver(handleMutations);
-  
-    observer.observe(feedRoot, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
-    });
-    logger.debug("CONTENT", "MutationObserver attached with scoped feed filter and enclosing-container resolution");
+    initFeedObserver(document);
   }
 })();

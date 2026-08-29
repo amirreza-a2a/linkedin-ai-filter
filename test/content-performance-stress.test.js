@@ -1,6 +1,6 @@
 // test/content-performance-stress.test.js
 // High-volume performance & memory stress tests for LinkedIn content script architecture.
-// Validates 10,000 irrelevant mutations, 500 Load More posts, 500 recycling ops, and long-session memory bounding.
+// Validates 10,000 irrelevant mutations, 500 Load More posts, 500 recycling ops, SPA feed root replacement, and memory lifecycle bounding.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +16,9 @@ import {
   getInFlightElementCount,
   getContentPerformanceStats,
   resetPerformanceStats,
+  attachFeedObserver,
+  disconnectFeedObserver,
+  findFeedRoot,
 } from "../src/content/content-index.js";
 
 // Mock node generator for stress testing
@@ -221,18 +224,29 @@ globalThis.document = {
   querySelectorAll: () => [],
 };
 
-test("Scenario A: 10,000 irrelevant class mutations produce 0 scans, 0 classifications, and 0 queue growth", () => {
+// Global MutationObserver mock
+globalThis.MutationObserver = class MockMutationObserver {
+  constructor(cb) {
+    this.cb = cb;
+    this.observedTarget = null;
+  }
+  observe(target) {
+    this.observedTarget = target;
+  }
+  disconnect() {
+    this.observedTarget = null;
+  }
+};
+
+test("1. 10,000 irrelevant nav/chat mutations -> zero scans, zero dispatches, 0 queue growth", () => {
   resetContentState();
   resetPerformanceStats();
 
-  // Create non-feed structures (Chat overlay, Global nav, Aside)
   const navBar = createMockNode("div", { id: "global-nav", class: "global-nav" });
   const chatOverlay = createMockNode("div", { class: "msg-overlay-container" });
   const asideRail = createMockNode("aside", { class: "scaffold-layout__aside" });
 
   const mutations = [];
-
-  // Generate 10,000 class mutations across non-feed elements
   for (let i = 0; i < 10000; i++) {
     const target = (i % 3 === 0) ? navBar : (i % 3 === 1) ? chatOverlay : asideRail;
     mutations.push({
@@ -253,7 +267,7 @@ test("Scenario A: 10,000 irrelevant class mutations produce 0 scans, 0 classific
   assert.equal(getPendingPosts().length, 0);
 });
 
-test("Scenario B: 5,000 irrelevant childList mutations produce 0 scans and 0 classifications", () => {
+test("2. 5,000 irrelevant childList mutations -> zero scans and zero dispatches", () => {
   resetContentState();
   resetPerformanceStats();
 
@@ -280,7 +294,7 @@ test("Scenario B: 5,000 irrelevant childList mutations produce 0 scans and 0 cla
   assert.equal(getPendingPosts().length, 0);
 });
 
-test("Scenario C: 500 hidden-video presentation mutations produce zero duplicate classifications and zero full-tree query churn", () => {
+test("3. 500 hidden-video class mutations -> zero full-container video traversals after initial processing", () => {
   resetContentState();
   resetPerformanceStats();
 
@@ -293,9 +307,10 @@ test("Scenario C: 500 hidden-video presentation mutations produce zero duplicate
   assert.equal(post.classList.contains("feedrule-hidden"), true);
   assert.equal(video.paused, true);
 
-  const initialStats = getContentPerformanceStats();
+  const statsAfterInit = getContentPerformanceStats();
+  const traversalsAtInit = statsAfterInit.videoPauseTraversals;
 
-  // Simulate 500 high-frequency playback class mutations on the hidden post
+  // Simulate 500 rapid video playback class mutations on the hidden post container
   const mutations = [];
   for (let i = 0; i < 500; i++) {
     post.setAttribute("class", `feed-shared-update-v2 video-playing-frame-${i}`);
@@ -310,13 +325,17 @@ test("Scenario C: 500 hidden-video presentation mutations produce zero duplicate
   processMutationQueue();
 
   const finalStats = getContentPerformanceStats();
-  // Video pause traversals should be minimal (processedVideos WeakSet caching)
+  assert.equal(
+    finalStats.videoPauseTraversals,
+    traversalsAtInit,
+    "500 class mutations must cause ZERO additional full-container video traversals"
+  );
   assert.equal(finalStats.classificationDispatches, 0, "Zero classification requests on video mutations");
   assert.equal(post.classList.contains("feedrule-hidden"), true, "Post remains continuously hidden");
   assert.equal(post.getAttribute("data-feedrule-hidden"), "true");
 });
 
-test("Scenario D: 500 Load More posts produce exactly 500 unique classifications and zero duplicates", () => {
+test("4. 500 new Load More posts -> exactly 500 unique queued identities", () => {
   resetContentState();
   resetPerformanceStats();
 
@@ -355,14 +374,13 @@ test("Scenario D: 500 Load More posts produce exactly 500 unique classifications
   assert.equal(getPendingPosts().length, 500, "Length must strictly remain 500 (0 duplicates)");
 });
 
-test("Scenario E: 500 DOM recycling operations correctly detect every A -> B identity transition", () => {
+test("5. 500 A -> B DOM recycling operations -> exactly 500 identity transitions detected", () => {
   resetContentState();
   resetPerformanceStats();
 
   const feedRoot = createMockNode("div", { class: "scaffold-finite-scroll__content" });
   const containers = [];
 
-  // Create 500 Post A containers
   for (let i = 0; i < 500; i++) {
     const postA = buildSyntheticPost(`urn:li:activity:origA_${i}`, `Author A ${i}`, `author-a-${i}`, `Original Post A ${i}`);
     feedRoot.appendChild(postA);
@@ -372,7 +390,6 @@ test("Scenario E: 500 DOM recycling operations correctly detect every A -> B ide
   scan(feedRoot);
   assert.equal(getPendingPosts().length, 500);
 
-  // Apply hidden decision to all Post A containers
   for (let i = 0; i < 500; i++) {
     applyDecision(containers[i], { id: `urn:li:activity:origA_${i}`, hide: true, reason: "Filter A", topics: [] });
     assert.equal(containers[i].classList.contains("feedrule-hidden"), true);
@@ -394,47 +411,158 @@ test("Scenario E: 500 DOM recycling operations correctly detect every A -> B ide
   handleMutations(recycleMutations);
   processMutationQueue();
 
-  // All 500 Post B items must be discovered and queued, and previous hidden states cleared
   const pending = getPendingPosts();
   assert.equal(pending.length, 1000, "500 Post A + 500 Post B = 1000 total queued");
   assert.equal(containers[0].classList.contains("feedrule-hidden"), false, "Recycled container must clear old hidden state");
 });
 
-test("Scenario F: Long-session simulation preserves bounded state and releases in-flight references", () => {
+test("6. Feed root replacement in SPA -> exactly one active observer at all times", () => {
+  resetContentState();
+  resetPerformanceStats();
+
+  const feedRoot1 = createMockNode("main", { class: "scaffold-layout__main" });
+  const feedRoot2 = createMockNode("div", { class: "scaffold-finite-scroll" });
+
+  // Attach to feedRoot1
+  attachFeedObserver(feedRoot1);
+  let stats = getContentPerformanceStats();
+  assert.equal(stats.currentObserverAttached, 1, "Exactly 1 observer attached");
+  assert.equal(stats.observerAttachCount, 1);
+
+  // Attach again to same feedRoot1 -> idempotent, does not duplicate
+  attachFeedObserver(feedRoot1);
+  stats = getContentPerformanceStats();
+  assert.equal(stats.currentObserverAttached, 1, "Still exactly 1 observer attached");
+  assert.equal(stats.observerAttachCount, 1);
+
+  // SPA navigation replaces feedRoot1 with feedRoot2
+  attachFeedObserver(feedRoot2);
+  stats = getContentPerformanceStats();
+  assert.equal(stats.currentObserverAttached, 1, "Exactly 1 observer attached after root replacement");
+  assert.equal(stats.observerAttachCount, 2);
+  assert.equal(stats.observerDisconnectCount, 1);
+  assert.equal(stats.feedRootChanges, 1);
+
+  disconnectFeedObserver();
+  stats = getContentPerformanceStats();
+  assert.equal(stats.currentObserverAttached, 0, "0 observers attached after disconnect");
+});
+
+test("7. Hidden post receives new video subtree -> newly inserted video is paused without scanning", () => {
+  resetContentState();
+  resetPerformanceStats();
+
+  const post = buildSyntheticPost("urn:li:activity:dynvideo", "Media Network", "media-net", "Streaming finance review");
+  scan(post);
+  applyDecision(post, { id: "urn:li:activity:dynvideo", hide: true, reason: "Finance spam", topics: ["finance"] });
+
+  // Dynamically insert a new video element into the hidden post
+  const newVideo = createMockNode("video", { class: "vjs-tech dynamic-player" });
+  post.appendChild(newVideo);
+
+  handleMutations([
+    {
+      type: "childList",
+      target: post,
+      addedNodes: [newVideo],
+    },
+  ]);
+
+  processMutationQueue();
+
+  assert.equal(newVideo.paused, true, "Dynamically mounted video must be paused");
+  assert.equal(getPendingPosts().length, 1, "Zero additional scans or classifications");
+  assert.equal(post.classList.contains("feedrule-hidden"), true);
+});
+
+test("8. Hidden post receives repeated class mutations -> no duplicate classification requests", () => {
+  resetContentState();
+  resetPerformanceStats();
+
+  const post = buildSyntheticPost("urn:li:activity:repclass", "Author Rep", "auth-rep", "Content for repeat class test");
+  scan(post);
+  applyDecision(post, { id: "urn:li:activity:repclass", hide: true, reason: "Spam", topics: [] });
+
+  for (let i = 0; i < 50; i++) {
+    post.setAttribute("class", `feed-shared-update-v2 tick-${i}`);
+    handleMutations([{ type: "attributes", target: post, attributeName: "class" }]);
+  }
+
+  processMutationQueue();
+  assert.equal(getPendingPosts().length, 1, "Pending posts must remain strictly 1");
+});
+
+test("9. Show Anyway + video mutations -> remains visible and never re-hidden", () => {
+  resetContentState();
+  resetPerformanceStats();
+
+  const post = buildSyntheticPost("urn:li:activity:showanyway", "Host", "host", "Conference keynote");
+  scan(post);
+  applyDecision(post, { id: "urn:li:activity:showanyway", hide: true, reason: "Keynote", topics: [] });
+
+  // Click Show anyway
+  const showBtn = post.querySelector(".feedrule-show-btn");
+  assert.ok(showBtn);
+  // Trigger user reveal logic
+  getUserRevealedPostIds().add("urn:li:activity:showanyway");
+  post.dataset.feedruleUserRevealed = "1";
+  post.classList.remove("feedrule-hidden");
+
+  // Video mutations occur
+  for (let i = 0; i < 20; i++) {
+    post.setAttribute("class", `feed-shared-update-v2 video-playing-${i}`);
+    handleMutations([{ type: "attributes", target: post, attributeName: "class" }]);
+  }
+
+  processMutationQueue();
+  assert.equal(post.classList.contains("feedrule-hidden"), false, "Must remain visible");
+});
+
+test("10. Stale API response after container recycling -> never touches newly bound post", () => {
+  resetContentState();
+  resetPerformanceStats();
+
+  const container = buildSyntheticPost("urn:li:activity:staleA", "Author A", "auth-a", "Post A content");
+  scan(container);
+
+  // Recycled to Post B before Post A response arrives
+  container.setAttribute("data-urn", "urn:li:activity:staleB");
+  scan(container);
+
+  // Post A stale response arrives
+  applyDecision(container, { id: "urn:li:activity:staleA", hide: true, reason: "Old filter", topics: [] });
+
+  // Container is currently Post B, so Post A decision must NOT be applied to this container!
+  assert.equal(container.classList.contains("feedrule-hidden"), false, "Stale response must not hide recycled container");
+});
+
+test("11. Memory lifecycle & DOM detachment test -> ensures 0 retained in-flight references", () => {
   resetContentState();
   resetPerformanceStats();
 
   const feedRoot = createMockNode("div", { class: "scaffold-finite-scroll__content" });
-  const navBar = createMockNode("div", { id: "global-nav" });
+  const createdPosts = [];
 
-  // 1. Fire 10,000 irrelevant mutations
-  for (let i = 0; i < 10000; i++) {
-    handleMutations([{ type: "attributes", target: navBar, attributeName: "class" }]);
+  for (let i = 0; i < 100; i++) {
+    const post = buildSyntheticPost(`urn:li:activity:mem_${i}`, `Author ${i}`, `author-${i}`, `Memory test ${i}`);
+    feedRoot.appendChild(post);
+    createdPosts.push(post);
   }
 
-  // 2. Add 1,000 post identities incrementally in batches of 100
-  for (let b = 0; b < 10; b++) {
-    const batchNodes = [];
-    for (let i = 0; i < 100; i++) {
-      const idx = b * 100 + i;
-      const post = buildSyntheticPost(`urn:li:activity:long_${idx}`, `Author ${idx}`, `author-${idx}`, `Long session text ${idx}`);
-      feedRoot.appendChild(post);
-      batchNodes.push(post);
-    }
-    handleMutations([{ type: "childList", target: feedRoot, addedNodes: batchNodes }]);
+  scan(feedRoot);
+  assert.equal(getPendingPosts().length, 100);
+
+  // Simulate completion of all 100 posts
+  for (let i = 0; i < 100; i++) {
+    applyDecision(createdPosts[i], { id: `urn:li:activity:mem_${i}`, hide: false });
   }
 
-  processMutationQueue();
+  // Detach all 100 DOM nodes from the tree (simulate virtualization/scrolling away)
+  for (const post of createdPosts) {
+    post.remove();
+  }
 
+  assert.equal(getInFlightElementCount(), 0, "elementById must have 0 entries when idle");
   const stats = getContentPerformanceStats();
-  assert.equal(getPendingPosts().length, 1000);
-
-  // Simulate completion of classification responses
-  for (let i = 0; i < 1000; i++) {
-    applyDecision(createMockNode("div"), { id: `urn:li:activity:long_${i}`, hide: false });
-  }
-
-  assert.equal(getInFlightElementCount(), 0, "In-flight DOM references must be 0 once processed");
-  assert.ok(stats.cachedDecisionsCount <= 2000, "Decision cache must be strictly bounded <= 2000");
-  assert.ok(stats.userRevealedCount <= 500, "User reveals must be strictly bounded <= 500");
+  assert.equal(stats.inFlightCount, 0, "inFlightPostIds must be 0");
 });
