@@ -1,6 +1,8 @@
 // src/graph/graph-renderer.js
 // High-performance HTML5 Canvas renderer with pan, zoom, hover highlight, node dragging, and Fit Graph.
 
+import { prepareEdgeRouting, computeEdgeGeometry } from "./edge-router.js";
+
 const NODE_COLORS = {
   post: { fill: "#0a66c2", stroke: "#004182", text: "#191919" },
   topic: { fill: "#10b981", stroke: "#047857", text: "#065f46" },
@@ -34,7 +36,7 @@ export class GraphRenderer {
     this.mouseDownY = 0;
     this.dragDistance = 0;
 
-    this.dpr = window.devicePixelRatio || 1;
+    this.dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     this.animationFrameId = null;
     this.isRunning = false;
 
@@ -43,15 +45,20 @@ export class GraphRenderer {
   }
 
   resize() {
-    const rect = this.canvas.parentElement.getBoundingClientRect();
+    const parent = this.canvas?.parentElement;
+    const rect = parent?.getBoundingClientRect ? parent.getBoundingClientRect() : { width: 800, height: 600 };
     const w = rect.width || 800;
     const h = rect.height || 600;
 
-    this.dpr = window.devicePixelRatio || 1;
-    this.canvas.width = w * this.dpr;
-    this.canvas.height = h * this.dpr;
-    this.canvas.style.width = `${w}px`;
-    this.canvas.style.height = `${h}px`;
+    this.dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    if (this.canvas) {
+      this.canvas.width = w * this.dpr;
+      this.canvas.height = h * this.dpr;
+      if (this.canvas.style) {
+        this.canvas.style.width = `${w}px`;
+        this.canvas.style.height = `${h}px`;
+      }
+    }
 
     this.layout.width = w;
     this.layout.height = h;
@@ -60,6 +67,10 @@ export class GraphRenderer {
 
   start() {
     this.isRunning = true;
+    if (typeof requestAnimationFrame === "undefined") {
+      this.draw();
+      return;
+    }
     const loop = () => {
       if (!this.isRunning) return;
       const isDone = this.layout.tick();
@@ -77,7 +88,7 @@ export class GraphRenderer {
 
   stop() {
     this.isRunning = false;
-    if (this.animationFrameId) {
+    if (this.animationFrameId && typeof cancelAnimationFrame !== "undefined") {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
@@ -178,6 +189,7 @@ export class GraphRenderer {
   }
 
   setupEvents() {
+    if (typeof window === "undefined" || !this.canvas?.addEventListener) return;
     const c = this.canvas;
 
     c.addEventListener("mousedown", (e) => {
@@ -292,7 +304,13 @@ export class GraphRenderer {
     const activeNode = this.hoveredNode || this.selectedNode;
     const connectedIds = this.getConnectedNodeIds(activeNode);
 
-    // 1. Draw Edges
+    // Ensure edge routing metadata is indexed for current layout edge set
+    if (this.layout.edges && this.layout.edges._routedCount !== this.layout.edges.length) {
+      prepareEdgeRouting(this.layout.edges);
+      this.layout.edges._routedCount = this.layout.edges.length;
+    }
+
+    // 1. Draw Edges (straight, quadratic Bézier, or cubic Bézier loop)
     for (const edge of this.layout.edges) {
       const u = edge.sourceNode;
       const v = edge.targetNode;
@@ -303,9 +321,19 @@ export class GraphRenderer {
       ctx.lineWidth = isConnected && activeNode ? 2.0 : 1.2;
       ctx.globalAlpha = !activeNode ? 0.7 : isConnected ? 1.0 : 0.12;
 
+      const geom = computeEdgeGeometry(edge);
+
       ctx.beginPath();
-      ctx.moveTo(u.x, u.y);
-      ctx.lineTo(v.x, v.y);
+      if (geom.type === "straight") {
+        ctx.moveTo(geom.x1, geom.y1);
+        ctx.lineTo(geom.x2, geom.y2);
+      } else if (geom.type === "curved") {
+        ctx.moveTo(geom.x1, geom.y1);
+        ctx.quadraticCurveTo(geom.cx, geom.cy, geom.x2, geom.y2);
+      } else if (geom.type === "loop") {
+        ctx.moveTo(geom.x1, geom.y1);
+        ctx.bezierCurveTo(geom.cp1x, geom.cp1y, geom.cp2x, geom.cp2y, geom.x2, geom.y2);
+      }
       ctx.stroke();
     }
 
