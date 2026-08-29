@@ -79,13 +79,20 @@
   
   const DISQUALIFIED_COMPOSER_SELECTORS = [
     "[data-testid='share-box']",
+    "[data-testid='share-box-feed-entry']",
     ".share-box-feed-entry__wrapper",
     ".share-box-feed-entry",
     ".feed-shared-creator-v2",
-    "button[aria-label*='Start a post']",
-    "button[aria-label*='Create a post']",
+    "[aria-label*='Start a post']",
+    "[aria-label*='Create a post']",
     ".share-creation-state",
     ".share-box__input",
+    "a[href*='/article/new/']",
+    "a[href*='/article/edit/']",
+    "#shareboxProfilePictureComponentRef",
+    "#draft-text-replaceable-component",
+    "[componentkey*='sharebox']",
+    "[componentkey*='draft-text']",
   ];
   
   const DISQUALIFIED_RECS_SELECTORS = [
@@ -137,7 +144,28 @@
           decision: "REJECT",
           score: 0,
           signals: { composer: true },
-          reason: "composer-detected",
+          reason: "composer",
+        };
+      }
+    }
+  
+    // Check 1B: Exact composer action combination (Start a post + Write article / Video / Photo)
+    const rawText = (el.innerText || el.textContent || "").trim();
+    const rawLower = rawText.toLowerCase();
+    if (
+      rawLower.includes("start a post") &&
+      (rawLower.includes("write article") || (rawLower.includes("video") && rawLower.includes("photo")))
+    ) {
+      const hasGenuinePostBody = Boolean(
+        el.querySelector?.(".update-components-text, [data-testid='expandable-text-box'], .feed-shared-update-v2__description")
+      );
+      if (!hasGenuinePostBody || rawText.length < 120) {
+        return {
+          qualified: false,
+          decision: "REJECT",
+          score: 0,
+          signals: { composer: true },
+          reason: "composer",
         };
       }
     }
@@ -767,10 +795,11 @@
   const FEED_ROOT_SELECTORS = [
     "main.scaffold-layout__main",
     "div[data-testid='mainFeed']",
-    ".scaffold-finite-scroll",
     ".scaffold-finite-scroll__content",
+    ".scaffold-finite-scroll",
+    "main#workspace section div[role='list']",
+    "main#workspace section",
     "main#workspace",
-    "div[role='list']",
     "div.core-rail",
     "main[role='main']",
   ];
@@ -954,7 +983,7 @@
     if (!doc || typeof doc.querySelector !== "function") return null;
     for (const sel of FEED_ROOT_SELECTORS) {
       const root = doc.querySelector(sel);
-      if (root) {
+      if (root && isRelevantFeedScope(root) && !root.closest?.("aside, .scaffold-layout__aside")) {
         logger.trace("FEED_ROOT_FOUND", `selector=${sel}`);
         return root;
       }
@@ -1584,8 +1613,13 @@
           continue;
         }
   
-        // BRANCH 2: Identity Attributes (data-urn, data-id, data-chameleon-urn)
-        if (attrName === "data-urn" || attrName === "data-id" || attrName === "data-chameleon-urn") {
+        // BRANCH 2: Identity Attributes (data-urn, data-id, data-chameleon-urn, data-lazy-mount-id)
+        if (
+          attrName === "data-urn" ||
+          attrName === "data-id" ||
+          attrName === "data-chameleon-urn" ||
+          attrName === "data-lazy-mount-id"
+        ) {
           performanceStats.identityMutations++;
           const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
           if (enclosing) {
@@ -1712,7 +1746,7 @@
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
+        attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "data-lazy-mount-id", "class"],
       });
   
       currentObservedFeedRoot = feedRoot;

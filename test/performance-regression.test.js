@@ -300,7 +300,7 @@ test("Pipeline Integration: Nested feed card extracts exactly 1 post without dup
   assert.equal(extractedPosts[0].authorUrl, "https://linkedin.com/in/sarah");
 
   // Verify non-posts were rejected
-  assert.ok(rejections.some((r) => r.reason === "composer-detected"));
+  assert.ok(rejections.some((r) => r.reason === "composer" || r.reason === "composer-detected"));
   assert.ok(rejections.some((r) => r.reason === "recommendation-card"));
   assert.ok(rejections.some((r) => r.reason === "comments-container"));
 });

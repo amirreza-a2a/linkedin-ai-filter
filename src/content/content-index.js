@@ -39,10 +39,11 @@ const NON_FEED_ANCESTOR_SELECTOR = [
 const FEED_ROOT_SELECTORS = [
   "main.scaffold-layout__main",
   "div[data-testid='mainFeed']",
-  ".scaffold-finite-scroll",
   ".scaffold-finite-scroll__content",
+  ".scaffold-finite-scroll",
+  "main#workspace section div[role='list']",
+  "main#workspace section",
   "main#workspace",
-  "div[role='list']",
   "div.core-rail",
   "main[role='main']",
 ];
@@ -226,7 +227,7 @@ export function findFeedRoot(doc = typeof document !== "undefined" ? document : 
   if (!doc || typeof doc.querySelector !== "function") return null;
   for (const sel of FEED_ROOT_SELECTORS) {
     const root = doc.querySelector(sel);
-    if (root) {
+    if (root && isRelevantFeedScope(root) && !root.closest?.("aside, .scaffold-layout__aside")) {
       logger.trace("FEED_ROOT_FOUND", `selector=${sel}`);
       return root;
     }
@@ -856,8 +857,13 @@ export function handleMutations(mutations) {
         continue;
       }
 
-      // BRANCH 2: Identity Attributes (data-urn, data-id, data-chameleon-urn)
-      if (attrName === "data-urn" || attrName === "data-id" || attrName === "data-chameleon-urn") {
+      // BRANCH 2: Identity Attributes (data-urn, data-id, data-chameleon-urn, data-lazy-mount-id)
+      if (
+        attrName === "data-urn" ||
+        attrName === "data-id" ||
+        attrName === "data-chameleon-urn" ||
+        attrName === "data-lazy-mount-id"
+      ) {
         performanceStats.identityMutations++;
         const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
         if (enclosing) {
@@ -984,7 +990,7 @@ export function attachFeedObserver(feedRoot) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
+      attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "data-lazy-mount-id", "class"],
     });
 
     currentObservedFeedRoot = feedRoot;

@@ -109,6 +109,15 @@ function matches(node, sel) {
   if (sel.includes("share-box")) {
     return node.attributes["data-testid"] === "share-box" || (node.attributes.class || "").includes("share-box");
   }
+  if (sel.includes("article/new") || sel.includes("article/edit")) {
+    return (node.attributes.href || "").includes("/article/new/") || (node.attributes.href || "").includes("/article/edit/");
+  }
+  if (sel.includes("sharebox") || sel.includes("draft-text")) {
+    return (node.attributes.id || "").includes("sharebox") || 
+           (node.attributes.id || "").includes("draft-text") || 
+           (node.attributes.componentkey || "").includes("sharebox") || 
+           (node.attributes.componentkey || "").includes("draft-text");
+  }
   if (sel.includes("expandable-text-box")) {
     return node.attributes["data-testid"] === "expandable-text-box";
   }
@@ -167,21 +176,121 @@ test("False-Positive Protection: 'Recommended for you' / PYMK Card -> REJECTED",
   assert.equal(res.reason, "recommendation-card");
 });
 
-test("False-Positive Protection: 'Start a post' Composer -> REJECTED", () => {
-  const composerBtn = el("BUTTON", { "aria-label": "Start a post, try writing with AI" }, [], "Start a post");
-  const composerBox = el(
+test("Test A: Modern LinkedIn Composer ('Start a post / Video / Photo / Write article') -> REJECTED (reason: composer)", () => {
+  const profileLink = el("A", { href: "https://www.linkedin.com/in/me/", id: "shareboxProfilePictureComponentRef" }, [], "");
+  const draftButton = el("DIV", { role: "button", "aria-label": "Start a post", id: "draft-text-replaceable-component" }, [], "Start a post");
+  const videoBtn = el("DIV", { role: "button" }, [], "Video");
+  const photoBtn = el("DIV", { role: "button" }, [], "Photo");
+  const articleLink = el("A", { href: "/article/new/" }, [], "Write article");
+
+  const modernComposer = el(
     "DIV",
     {
-      class: "share-box-feed-entry__wrapper",
-      role: "listitem",
+      "data-lazy-mount-id": "1j48jds",
+      style: "display: contents;",
     },
-    [composerBtn]
+    [profileLink, draftButton, videoBtn, photoBtn, articleLink],
+    "Start a post\n\nVideo\n\nPhoto\n\nWrite article"
   );
 
-  const res = isLikelyPostContainer(composerBox);
+  const res = isLikelyPostContainer(modernComposer);
   assert.equal(res.qualified, false);
   assert.equal(res.decision, "REJECT");
-  assert.equal(res.reason, "composer-detected");
+  assert.equal(res.reason, "composer");
+  assert.equal(res.score, 0);
+});
+
+test("Test B: Real normal post with genuine author and commentary -> ACCEPTED", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/sarah-dev" }, [], "Sarah Dev");
+  const text = el("DIV", { class: "update-components-text" }, [], "Excited to announce our open source AI compiler release today!");
+  const normalPost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "norm_post_1",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, text]
+  );
+
+  const res = isLikelyPostContainer(normalPost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+});
+
+test("Test C: Real video post -> ACCEPTED as genuine post", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/company/robotics-co" }, [], "Robotics Co");
+  const text = el("DIV", { class: "update-components-text" }, [], "Autonomous quadrupeds navigating rugged mountain terrain.");
+  const video = el("VIDEO", { src: "https://example.com/stream.mp4" });
+  const videoPost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "video_post_1",
+      class: "feed-shared-update-v2 feed-shared-update-v2--video",
+    },
+    [authorLink, text, video]
+  );
+
+  const res = isLikelyPostContainer(videoPost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+});
+
+test("Test D: Real image post -> ACCEPTED as genuine post", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/alex-design" }, [], "Alex Design");
+  const text = el("DIV", { class: "update-components-text" }, [], "New UI mockup system design exploration.");
+  const img = el("IMG", { class: "update-components-image__image", src: "https://media.licdn.com/dms/image/123.jpg" });
+  const imagePost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "image_post_1",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, text, img]
+  );
+
+  const res = isLikelyPostContainer(imagePost);
+  assert.equal(res.qualified, true);
+  assert.equal(res.decision, "ACCEPT");
+});
+
+test("Test E: 'Start a post' mentioned inside legitimate post content -> MUST NOT be rejected", () => {
+  const authorLink = el("A", { href: "https://www.linkedin.com/in/creator-coach" }, [], "Creator Coach");
+  const postBody = el(
+    "DIV",
+    { class: "update-components-text" },
+    [],
+    "When you click 'Start a post' on LinkedIn, focus on writing a clear hook in the first 2 lines. Include a photo or video to increase engagement."
+  );
+  const legitimatePost = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "legit_post_about_posting",
+      class: "feed-shared-update-v2",
+    },
+    [authorLink, postBody],
+    "When you click 'Start a post' on LinkedIn, focus on writing a clear hook in the first 2 lines. Include a photo or video to increase engagement."
+  );
+
+  const res = isLikelyPostContainer(legitimatePost);
+  assert.equal(res.qualified, true, "Post discussing 'Start a post' in body must remain qualified");
+  assert.notEqual(res.reason, "composer", "Legitimate post must not be rejected as composer");
+});
+
+test("Test F: Localized/modified composer text -> still REJECTED when structural markers identify composer", () => {
+  const articleBtn = el("A", { href: "https://www.linkedin.com/article/new/" }, [], "Créer un article");
+  const localizedComposer = el(
+    "DIV",
+    {
+      "data-lazy-mount-id": "loc_composer",
+      class: "share-box-feed-entry",
+    },
+    [articleBtn]
+  );
+
+  const res = isLikelyPostContainer(localizedComposer);
+  assert.equal(res.qualified, false);
+  assert.equal(res.decision, "REJECT");
+  assert.equal(res.reason, "composer");
 });
 
 test("False-Positive Protection: Comments-Only Container -> REJECTED", () => {

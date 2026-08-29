@@ -5,13 +5,20 @@
 
 const DISQUALIFIED_COMPOSER_SELECTORS = [
   "[data-testid='share-box']",
+  "[data-testid='share-box-feed-entry']",
   ".share-box-feed-entry__wrapper",
   ".share-box-feed-entry",
   ".feed-shared-creator-v2",
-  "button[aria-label*='Start a post']",
-  "button[aria-label*='Create a post']",
+  "[aria-label*='Start a post']",
+  "[aria-label*='Create a post']",
   ".share-creation-state",
   ".share-box__input",
+  "a[href*='/article/new/']",
+  "a[href*='/article/edit/']",
+  "#shareboxProfilePictureComponentRef",
+  "#draft-text-replaceable-component",
+  "[componentkey*='sharebox']",
+  "[componentkey*='draft-text']",
 ];
 
 const DISQUALIFIED_RECS_SELECTORS = [
@@ -63,7 +70,28 @@ export function isLikelyPostContainer(el) {
         decision: "REJECT",
         score: 0,
         signals: { composer: true },
-        reason: "composer-detected",
+        reason: "composer",
+      };
+    }
+  }
+
+  // Check 1B: Exact composer action combination (Start a post + Write article / Video / Photo)
+  const rawText = (el.innerText || el.textContent || "").trim();
+  const rawLower = rawText.toLowerCase();
+  if (
+    rawLower.includes("start a post") &&
+    (rawLower.includes("write article") || (rawLower.includes("video") && rawLower.includes("photo")))
+  ) {
+    const hasGenuinePostBody = Boolean(
+      el.querySelector?.(".update-components-text, [data-testid='expandable-text-box'], .feed-shared-update-v2__description")
+    );
+    if (!hasGenuinePostBody || rawText.length < 120) {
+      return {
+        qualified: false,
+        decision: "REJECT",
+        score: 0,
+        signals: { composer: true },
+        reason: "composer",
       };
     }
   }

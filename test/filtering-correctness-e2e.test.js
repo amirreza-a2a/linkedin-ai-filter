@@ -250,7 +250,10 @@ function checkMatches(node, sel) {
     if (sel.includes("href*='/in/'")) return (node.getAttribute("href") || "").includes("/in/");
     if (sel.includes("href*='/company/'")) return (node.getAttribute("href") || "").includes("/company/");
     if (sel.includes("href*='/school/'")) return (node.getAttribute("href") || "").includes("/school/");
-    return true;
+    if (sel.includes("href*='/article/new/'")) return (node.getAttribute("href") || "").includes("/article/new/");
+    if (sel.includes("href*='/article/edit/'")) return (node.getAttribute("href") || "").includes("/article/edit/");
+    if (sel.includes("href*='/posts/'")) return (node.getAttribute("href") || "").includes("/posts/");
+    return false;
   }
 
   if (sel.startsWith('[data-testid="expandable-text-box"]')) {
