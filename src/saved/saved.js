@@ -1,6 +1,7 @@
 // src/saved/saved.js
 import { getSavedPosts, unsavePost } from "../storage/saved-posts-store.js";
 import { exportToMarkdown, exportToJson } from "../export/export-helper.js";
+import { openExtensionPage } from "../navigation/navigation.js";
 
 const searchInput = document.getElementById("searchInput");
 const topicSelect = document.getElementById("topicSelect");
@@ -157,7 +158,7 @@ exportJsonBtn.addEventListener("click", () => {
 if (openGraphBtn) {
   openGraphBtn.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
+    openExtensionPage("graph");
   });
 }
 

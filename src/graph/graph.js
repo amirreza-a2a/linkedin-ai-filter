@@ -11,6 +11,7 @@ import { ForceLayout, PHYSICS_PRESETS } from "./force-layout.js";
 import { GraphRenderer } from "./graph-renderer.js";
 import { getSavedPosts } from "../storage/saved-posts-store.js";
 import { escapeXml } from "../dashboard/charts.js";
+import { openExtensionPage } from "../navigation/navigation.js";
 
 // DOM Elements
 const canvas = document.getElementById("graph-canvas");
@@ -439,14 +440,14 @@ if (toggleSidebarBtn) {
 if (openBrainBtn) {
   openBrainBtn.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/saved/saved.html") });
+    openExtensionPage("saved");
   });
 }
 
 if (openDashboardBtn) {
   openDashboardBtn.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/dashboard/dashboard.html") });
+    openExtensionPage("dashboard");
   });
 }
 

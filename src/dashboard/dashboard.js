@@ -3,6 +3,7 @@ import { getLogEntries, clearLog } from "../storage/log-store.js";
 import { getSettings } from "../storage/rules-store.js";
 import { computeDashboardAnalytics } from "../analytics/dashboard-analytics.js";
 import { renderTrendChart, renderTopicBarChart, escapeXml } from "./charts.js";
+import { openExtensionPage } from "../navigation/navigation.js";
 
 const statsGrid = document.getElementById("statsGrid");
 const trendChartContainer = document.getElementById("trendChartContainer");
@@ -177,14 +178,14 @@ clearBtn.addEventListener("click", async () => {
 if (openBrainBtn) {
   openBrainBtn.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/saved/saved.html") });
+    openExtensionPage("saved");
   });
 }
 
 if (openGraphBtn) {
   openGraphBtn.addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
+    openExtensionPage("graph");
   });
 }
 

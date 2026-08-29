@@ -1,5 +1,6 @@
 // src/popup/popup.js
 import { getSettings, setSettings } from "../storage/rules-store.js";
+import { openExtensionPage } from "../navigation/navigation.js";
 
 const rulesEl = document.getElementById("rules");
 const saveRulesEl = document.getElementById("saveRules");
@@ -28,22 +29,22 @@ enabledEl.addEventListener("change", async () => {
 
 document.getElementById("openGraph").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL("src/graph/graph.html") });
+  openExtensionPage("graph");
 });
 
 document.getElementById("openSaved").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL("src/saved/saved.html") });
+  openExtensionPage("saved");
 });
 
 document.getElementById("openDashboard").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL("src/dashboard/dashboard.html") });
+  openExtensionPage("dashboard");
 });
 
 document.getElementById("openOptions").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.runtime.openOptionsPage();
+  openExtensionPage("options");
 });
 
 load();
