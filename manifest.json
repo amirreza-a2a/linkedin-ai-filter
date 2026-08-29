@@ -45,6 +45,7 @@
     {
       "resources": [
         "src/content/content-index.js",
+        "src/content/post-qualifier.js",
         "src/content/author-extractor.js",
         "src/storage/saved-posts-store.js"
       ],

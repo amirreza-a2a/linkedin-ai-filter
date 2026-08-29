@@ -1,17 +1,24 @@
 // src/content/content-index.js
 // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
 
+import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
 
 console.log("[FeedRule] content script module loaded on", typeof location !== "undefined" ? location.href : "");
 
 const HIDDEN_CLASS = "feedrule-hidden";
 
+// Debug instrumentation flag (can be enabled via window.__FEEDRULE_DEBUG__ = true)
+export const isDebugEnabled = () =>
+  typeof window !== "undefined" && Boolean(window.__FEEDRULE_DEBUG__);
+
 const CONTAINER_CANDIDATES = [
+  "div.feed-shared-update-v2",
   'div[data-testid="mainFeed"] div[role="listitem"]',
   'div[role="listitem"]',
-  "div.feed-shared-update-v2[data-urn]",
-  "div[data-urn][data-id]",
+  "div[data-urn*='activity:']",
+  "div[data-urn*='ugcPost:']",
+  "div[data-id*='activity:']",
 ];
 
 const TEXT_CANDIDATES = [
@@ -107,23 +114,20 @@ export function extractPost(el) {
   return { id, text, author, authorUrl, postUrl, el };
 }
 
-let activeContainerSelector = null;
-
 function findContainers(root) {
-  if (activeContainerSelector) {
-    return root.matches?.(activeContainerSelector)
-      ? [root]
-      : Array.from(root.querySelectorAll?.(activeContainerSelector) || []);
-  }
+  const candidates = new Set();
+
   for (const sel of CONTAINER_CANDIDATES) {
+    if (root.matches?.(sel)) {
+      candidates.add(root);
+    }
     const found = root.querySelectorAll?.(sel) || [];
-    if (found.length > 0) {
-      activeContainerSelector = sel;
-      console.log(`[FeedRule] matched container selector: "${sel}" (${found.length} found)`);
-      return Array.from(found);
+    for (const node of found) {
+      candidates.add(node);
     }
   }
-  return [];
+
+  return Array.from(candidates);
 }
 
 // --- DOM filtering ---------------------------------------------------
@@ -247,11 +251,25 @@ function flush() {
   processQueue();
 }
 
-function scan(root) {
+export function scan(root) {
   const nodes = findContainers(root);
   for (const node of nodes) {
     if (seen.has(node)) continue;
     seen.add(node);
+
+    // Dedicated Post Qualification Layer
+    const qualification = isLikelyPostContainer(node);
+    if (!qualification.qualified) {
+      if (isDebugEnabled()) {
+        console.log(`[FeedRule] REJECTED: ${qualification.reason}`, node);
+      }
+      continue;
+    }
+
+    if (isDebugEnabled()) {
+      console.log(`[FeedRule] ACCEPTED: ${qualification.reason}`, node);
+    }
+
     const post = extractPost(node);
     if (post) pending.push(post);
   }
