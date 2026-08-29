@@ -29,6 +29,17 @@ export async function clearDecisionLogData() {
 }
 
 /**
+ * Clears the persistent API request logs from local storage.
+ *
+ * @returns {Promise<void>}
+ */
+export async function clearApiLogsData() {
+  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+    await chrome.storage.local.remove("apiLogs");
+  }
+}
+
+/**
  * Enumerates all keys in chrome.storage.local and removes only keys starting with "cache:".
  * Preserves settings, API keys, saved posts, decision logs, and any other local data.
  *

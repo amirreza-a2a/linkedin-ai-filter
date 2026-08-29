@@ -39,6 +39,54 @@ export async function buildCacheKey({
   return simpleHash(payload);
 }
 
+/**
+ * Normalizes raw API keys into arrays of unique non-empty strings per provider.
+ * Supports legacy single string values, arrays, and empty/missing inputs.
+ *
+ * @param {Object} raw
+ * @returns {{ openai: string[], gemini: string[], claude: string[] }}
+ */
+export function normalizeApiKeys(raw) {
+  const out = { openai: [], gemini: [], claude: [] };
+  if (!raw || typeof raw !== "object") return out;
+
+  for (const provider of ["openai", "gemini", "claude"]) {
+    const val = raw[provider];
+    if (Array.isArray(val)) {
+      const unique = [];
+      for (const k of val) {
+        if (typeof k === "string" && k.trim().length > 0 && !unique.includes(k.trim())) {
+          unique.push(k.trim());
+        }
+      }
+      out[provider] = unique;
+    } else if (typeof val === "string" && val.trim().length > 0) {
+      out[provider] = [val.trim()];
+    }
+  }
+  return out;
+}
+
+/**
+ * Convenience helper to extract the primary API key for a provider.
+ * Returns the first configured key or empty string.
+ *
+ * @param {Object|string[]|string} apiKeysOrList
+ * @param {string} [provider]
+ * @returns {string}
+ */
+export function getPrimaryApiKey(apiKeysOrList, provider) {
+  if (!apiKeysOrList) return "";
+  if (typeof apiKeysOrList === "string") return apiKeysOrList.trim();
+  if (Array.isArray(apiKeysOrList)) return apiKeysOrList[0] || "";
+  if (typeof apiKeysOrList === "object" && provider) {
+    const val = apiKeysOrList[provider];
+    if (typeof val === "string") return val.trim();
+    if (Array.isArray(val)) return val[0] || "";
+  }
+  return "";
+}
+
 export async function getSettings() {
   const synced = (await chrome.storage.sync.get([
     "enabled",
@@ -59,10 +107,8 @@ export async function getSettings() {
     typeof synced.baseUrl === "object" && synced.baseUrl !== null && !Array.isArray(synced.baseUrl)
       ? synced.baseUrl
       : {};
-  const localApiKeys =
-    typeof local.apiKeys === "object" && local.apiKeys !== null && !Array.isArray(local.apiKeys)
-      ? local.apiKeys
-      : {};
+
+  const normalizedApiKeys = normalizeApiKeys(local.apiKeys);
 
   return {
     enabled: synced.enabled ?? DEFAULTS.enabled,
@@ -72,7 +118,7 @@ export async function getSettings() {
     model: { ...DEFAULTS.model, ...syncedModel },
     baseUrl: { ...DEFAULTS.baseUrl, ...syncedBaseUrl },
     dailyCallCap: typeof synced.dailyCallCap === "number" ? synced.dailyCallCap : DEFAULTS.dailyCallCap,
-    apiKeys: localApiKeys,
+    apiKeys: normalizedApiKeys,
   };
 }
 
@@ -83,7 +129,15 @@ export async function setSettings(partial) {
   }
   if (apiKeys) {
     const current = (await chrome.storage.local.get(["apiKeys"])).apiKeys || {};
-    await chrome.storage.local.set({ apiKeys: { ...current, ...apiKeys } });
+    const normCurrent = normalizeApiKeys(current);
+    const normNew = normalizeApiKeys(apiKeys);
+    const merged = { ...normCurrent };
+    for (const p of ["openai", "gemini", "claude"]) {
+      if (apiKeys[p] !== undefined) {
+        merged[p] = normNew[p];
+      }
+    }
+    await chrome.storage.local.set({ apiKeys: merged });
   }
 }
 

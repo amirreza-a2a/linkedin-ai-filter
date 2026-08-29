@@ -251,5 +251,5 @@ test("Storage Backward Compatibility - mock chrome.storage", async () => {
     gemini: "",
     claude: "",
   });
-  assert.equal(s.apiKeys.openai, "key123");
+  assert.deepEqual(s.apiKeys.openai, ["key123"]);
 });

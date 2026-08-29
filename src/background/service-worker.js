@@ -2,6 +2,7 @@
 import { getProviderFn } from "../llm/factory.js";
 import {
   getSettings,
+  getPrimaryApiKey,
   getCachedDecisions,
   setCachedDecisions,
   incrementAndCheckDailyCap,
@@ -134,7 +135,7 @@ async function handleClassify(posts) {
   const rulesText = settings.rulesText || "";
   const saveRulesText = settings.saveRulesText || "";
   const baseUrl = settings.baseUrl?.[provider] || "";
-  const apiKey = settings.apiKeys?.[provider] || "";
+  const apiKey = getPrimaryApiKey(settings.apiKeys, provider);
 
   if (!settings.enabled || !rulesText.trim()) {
     const results = posts.map((p) => ({

@@ -1,5 +1,5 @@
 // src/options/options.js
-import { getSettings, setSettings } from "../storage/rules-store.js";
+import { getSettings, setSettings, getPrimaryApiKey } from "../storage/rules-store.js";
 import { validateAndNormalizeBaseUrl, getRequiredOriginPattern } from "../llm/url-helper.js";
 import { testProviderConnection } from "../llm/test-connection.js";
 import {
@@ -145,9 +145,9 @@ export function updateProviderVisibility(activeProvider) {
 export async function load() {
   const s = await getSettings();
   if (els.provider) els.provider.value = s.provider;
-  if (els.openaiKey) els.openaiKey.value = s.apiKeys?.openai || "";
-  if (els.geminiKey) els.geminiKey.value = s.apiKeys?.gemini || "";
-  if (els.claudeKey) els.claudeKey.value = s.apiKeys?.claude || "";
+  if (els.openaiKey) els.openaiKey.value = getPrimaryApiKey(s.apiKeys, "openai");
+  if (els.geminiKey) els.geminiKey.value = getPrimaryApiKey(s.apiKeys, "gemini");
+  if (els.claudeKey) els.claudeKey.value = getPrimaryApiKey(s.apiKeys, "claude");
   if (els.openaiModel) els.openaiModel.value = s.model?.openai || "gpt-4o-mini";
   if (els.geminiModel) els.geminiModel.value = s.model?.gemini || "gemini-3.5-flash";
   if (els.claudeModel) els.claudeModel.value = s.model?.claude || "claude-haiku-4-5-20251001";
