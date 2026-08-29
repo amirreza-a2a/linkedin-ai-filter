@@ -697,7 +697,7 @@
   // src/content/content-index.js
   // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
   // Identity-aware incremental reprocessing for initial load, Load More, container reuse, and video autoplay.
-  // Hardened against video autoplay flicker loops, self-mutation loops, memory leaks, and DOM recycling race conditions.
+  // High-performance architecture: non-feed fast rejection, scoped mutation routing, cached video state, and 0 in-flight memory leaks.
   
   
   
@@ -714,6 +714,19 @@
     "div[data-id*='activity:']",
     'div[data-testid="mainFeed"] div[role="listitem"]',
     'div[role="listitem"]',
+  ].join(", ");
+  
+  const NON_FEED_ANCESTOR_SELECTOR = [
+    "#global-nav",
+    ".global-nav",
+    ".msg-overlay-container",
+    ".msg-overlay-list-bubble",
+    ".scaffold-layout__aside",
+    "#artdeco-toasts__wormhole",
+    ".feed-follows-module",
+    "aside",
+    "header",
+    "footer",
   ].join(", ");
   
   const TEXT_CANDIDATES = [
@@ -735,6 +748,61 @@
     "a.app-aware-link[href*='/posts/']",
   ];
   
+  // --- Performance Instrumentation Counters (Dev / Diagnostic) ---------
+  const performanceStats = {
+    mutationCallbacks: 0,
+    childListMutations: 0,
+    attributeMutations: 0,
+    classMutations: 0,
+    identityMutations: 0,
+    relevantMutations: 0,
+    ignoredMutations: 0,
+    feedContainerResolutions: 0,
+    postContainerResolutions: 0,
+    scanCalls: 0,
+    findContainersCalls: 0,
+    querySelectorAllCalls: 0,
+    videoPauseTraversals: 0,
+    videosPaused: 0,
+    classificationDispatches: 0,
+    mutationQueueMaxSize: 0,
+    inFlightElementMaxSize: 0,
+    startTime: typeof Date !== "undefined" ? Date.now() : 0,
+  };
+  
+  function resetPerformanceStats() {
+    performanceStats.mutationCallbacks = 0;
+    performanceStats.childListMutations = 0;
+    performanceStats.attributeMutations = 0;
+    performanceStats.classMutations = 0;
+    performanceStats.identityMutations = 0;
+    performanceStats.relevantMutations = 0;
+    performanceStats.ignoredMutations = 0;
+    performanceStats.feedContainerResolutions = 0;
+    performanceStats.postContainerResolutions = 0;
+    performanceStats.scanCalls = 0;
+    performanceStats.findContainersCalls = 0;
+    performanceStats.querySelectorAllCalls = 0;
+    performanceStats.videoPauseTraversals = 0;
+    performanceStats.videosPaused = 0;
+    performanceStats.classificationDispatches = 0;
+    performanceStats.mutationQueueMaxSize = 0;
+    performanceStats.inFlightElementMaxSize = 0;
+    performanceStats.startTime = Date.now();
+  }
+  
+  function getContentPerformanceStats() {
+    return {
+      ...performanceStats,
+      mutationQueueSize: mutationQueue.size,
+      cachedDecisionsCount: decisionsById.size,
+      userRevealedCount: userRevealedPostIds.size,
+      inFlightCount: inFlightPostIds.size,
+      inFlightElementCount: elementById.size,
+      uptimeMs: Date.now() - performanceStats.startTime,
+    };
+  }
+  
   // Simple non-cryptographic hash (djb2) for fallback fingerprinting
   function hashText(str) {
     let hash = 5381;
@@ -744,22 +812,78 @@
     return "t" + (hash >>> 0).toString(36);
   }
   
+  // Track processed / paused video elements to prevent repeat full-subtree traversals
+  const processedVideos = new WeakSet();
+  
   /**
-   * Helper to pause any active video playback within a hidden post container
-   * to prevent background CPU consumption and continuous media state updates.
+   * Helper to pause any active video playback within a hidden post container.
+   * Uses WeakSet caching to avoid repeated calls on already-paused video elements.
    *
    * @param {Element|Object} container
    */
   function pauseVideosInContainer(container) {
     if (!container || typeof container.querySelectorAll !== "function") return;
+    performanceStats.videoPauseTraversals++;
     try {
       const videos = container.querySelectorAll("video");
+      performanceStats.querySelectorAllCalls++;
       for (const v of videos) {
-        if (v && typeof v.pause === "function" && !v.paused) {
-          v.pause();
+        if (v && !processedVideos.has(v)) {
+          processedVideos.add(v);
+          if (typeof v.pause === "function" && !v.paused) {
+            v.pause();
+            performanceStats.videosPaused++;
+          }
         }
       }
     } catch {}
+  }
+  
+  function pauseSingleVideo(videoNode) {
+    if (!videoNode || processedVideos.has(videoNode)) return;
+    processedVideos.add(videoNode);
+    try {
+      if (typeof videoNode.pause === "function" && !videoNode.paused) {
+        videoNode.pause();
+        performanceStats.videosPaused++;
+      }
+    } catch {}
+  }
+  
+  /**
+   * Evaluates whether a DOM node is within the relevant LinkedIn feed scope.
+   * Drops mutations from chat drawer, top navigation, sidebars, and ads in a single check.
+   *
+   * @param {Element|Object} node
+   * @returns {boolean}
+   */
+  function isRelevantFeedScope(node) {
+    if (!node || node.nodeType !== 1) return false;
+  
+    // Extension-injected UI is never an unclassified post container
+    if (
+      node.classList?.contains?.("feedrule-placeholder") ||
+      node.classList?.contains?.("feedrule-show-btn")
+    ) {
+      return false;
+    }
+  
+    // Reject non-feed regions (Messaging, Global Nav, Rail, Modals)
+    if (node.closest?.(NON_FEED_ANCESTOR_SELECTOR)) {
+      return false;
+    }
+  
+    return true;
+  }
+  
+  function isFeedContainerRoot(node) {
+    if (!node || node.nodeType !== 1) return false;
+    return Boolean(
+      node.classList?.contains?.("scaffold-finite-scroll__content") ||
+      node.classList?.contains?.("scaffold-finite-scroll") ||
+      node.getAttribute?.("data-testid") === "mainFeed" ||
+      node.classList?.contains?.("core-rail")
+    );
   }
   
   /**
@@ -830,19 +954,29 @@
   
   /**
    * Finds candidate container elements with deduplication favoring canonical inner update nodes.
-   * Executes in a single consolidated query pass for high throughput.
+   * Optimized with fast-path return when root is already a resolved post container.
    *
    * @param {Element|Object} root
    * @returns {Array<Element|Object>}
    */
   function findContainers(root) {
     if (!root || typeof root.querySelectorAll !== "function") return [];
+    performanceStats.findContainersCalls++;
+  
+    // Fast Path: If root is already a leaf post container, return immediately without subtree query
+    if (
+      root.classList?.contains?.("feed-shared-update-v2") &&
+      root.getAttribute?.("role") !== "listitem"
+    ) {
+      return [root];
+    }
   
     const rawCandidates = [];
     if (root.matches?.(COMBINED_CONTAINER_SELECTOR)) {
       rawCandidates.push(root);
     }
     const found = root.querySelectorAll(COMBINED_CONTAINER_SELECTOR) || [];
+    performanceStats.querySelectorAllCalls++;
     for (const node of found) {
       rawCandidates.push(node);
     }
@@ -903,6 +1037,7 @@
   
     cacheDecision(decision.id, decision);
     inFlightPostIds.delete(decision.id);
+    elementById.delete(decision.id);
   
     // Stale selection protection: if el is currently bound to a different post, do not touch this element
     const currentPostOnNode = nodeToPostId.get(el);
@@ -1013,6 +1148,7 @@
     if (mutationTimer) clearTimeout(mutationTimer);
     mutationTimer = null;
     mutationQueue.clear();
+    resetPerformanceStats();
   }
   
   function sendBatchMessage(batch, callback) {
@@ -1020,7 +1156,12 @@
       callback();
       return;
     }
+    performanceStats.classificationDispatches++;
     for (const post of batch) elementById.set(post.id, post.el);
+  
+    if (elementById.size > performanceStats.inFlightElementMaxSize) {
+      performanceStats.inFlightElementMaxSize = elementById.size;
+    }
   
     try {
       chrome.runtime.sendMessage(
@@ -1117,6 +1258,7 @@
    * @param {Element|Object} root
    */
   function scan(root) {
+    performanceStats.scanCalls++;
     const nodes = findContainers(root);
   
     if (isDebugEnabled()) {
@@ -1252,88 +1394,51 @@
   
   /**
    * Centralized MutationObserver handler.
-   * Observes child additions and targeted container attributes, resolving enclosing post containers.
-   * Hardened to prevent video autoplay flicker loops and self-mutation loops.
+   * High-performance routed pipeline:
+   * 1. Scope filter drops non-feed mutations (chat, nav, sidebars) immediately.
+   * 2. Class mutations on hidden posts trigger synchronous presentation enforcement without queueing.
+   * 3. Identity mutations (data-urn) trigger post container recycling / re-evaluation.
+   * 4. Child additions queue only verified post containers or feed sections.
    *
    * @param {MutationRecord[]} mutations
    */
   function handleMutations(mutations) {
+    performanceStats.mutationCallbacks++;
     let sawAdditions = false;
+  
     for (const m of mutations || []) {
-      if (isDebugEnabled()) {
-        logger.debug(
-          "CONTENT",
-          `[MUTATION] type=${m.type} target=${m.target?.tagName || "UNKNOWN"} addedElements=${m.addedNodes?.length || 0}`
-        );
+      const target = m.target;
+      if (!target || target.nodeType !== 1) continue;
+  
+      // Fast Non-Feed Scope Filter (drops chat, nav, notifications in 1 check)
+      if (!isRelevantFeedScope(target)) {
+        performanceStats.ignoredMutations++;
+        continue;
       }
   
-      if (m.type === "childList") {
-        for (const node of m.addedNodes || []) {
-          if (!node || node.nodeType !== 1) continue; // Node.ELEMENT_NODE
+      if (m.type === "attributes") {
+        performanceStats.attributeMutations++;
+        const attrName = m.attributeName;
   
-          // Self-mutation defense: ignore extension-injected UI elements
-          if (
-            node.classList?.contains?.("feedrule-placeholder") ||
-            node.classList?.contains?.("feedrule-show-btn")
-          ) {
+        // Case A: Presentation Attribute (class)
+        if (attrName === "class") {
+          performanceStats.classMutations++;
+          // Resolve enclosing container
+          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || (target.matches?.(COMBINED_CONTAINER_SELECTOR) ? target : null);
+          if (!enclosing) {
+            performanceStats.ignoredMutations++;
             continue;
           }
   
-          // If the added node is inside an existing container, resolve enclosing container
-          const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
-          if (enclosing) {
-            const currentPostId = nodeToPostId.get(enclosing);
-            // If the enclosing container is already classified as hidden, enforce hidden state synchronously
-            if (currentPostId && decisionsById.has(currentPostId)) {
-              const decision = decisionsById.get(currentPostId);
-              if (decision?.hide && !userRevealedPostIds.has(currentPostId) && enclosing.dataset?.feedruleUserRevealed !== "1") {
-                // Synchronous re-assertion: ensure classes/attributes are intact & pause video
-                if (!enclosing.classList?.contains?.(HIDDEN_CLASS)) {
-                  enclosing.classList?.add?.(HIDDEN_CLASS);
-                }
-                if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
-                  enclosing.setAttribute?.("data-feedrule-hidden", "true");
-                }
-                pauseVideosInContainer(enclosing);
-                // Already classified and hidden: do NOT queue for re-scanning
-                continue;
-              }
-            }
-            mutationQueue.add(enclosing);
-          } else {
-            mutationQueue.add(node);
-          }
-          sawAdditions = true;
-        }
-      } else if (m.type === "attributes") {
-        const target = m.target;
-        if (target && target.nodeType === 1) {
-          // Self-mutation defense: ignore attribute changes on extension-injected elements
-          if (
-            target.classList?.contains?.("feedrule-placeholder") ||
-            target.classList?.contains?.("feedrule-show-btn")
-          ) {
-            continue;
-          }
-  
-          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
           const currentPostId = nodeToPostId.get(enclosing);
-  
-          // Identity attributes (data-urn, data-id) signal container recycling or new post binding
-          const isIdentityAttribute =
-            m.attributeName === "data-urn" ||
-            m.attributeName === "data-id" ||
-            m.attributeName === "data-chameleon-urn";
-  
-          // If this is a presentation attribute (e.g. class) and container is already classified
-          if (!isIdentityAttribute && currentPostId && decisionsById.has(currentPostId)) {
+          if (currentPostId && decisionsById.has(currentPostId)) {
             const decision = decisionsById.get(currentPostId);
             if (
               decision?.hide &&
               !userRevealedPostIds.has(currentPostId) &&
               enclosing.dataset?.feedruleUserRevealed !== "1"
             ) {
-              // Synchronously re-assert hidden state if LinkedIn stripped classes during video playback
+              // Synchronously re-assert hidden state if stripped by LinkedIn video playback
               if (!enclosing.classList?.contains?.(HIDDEN_CLASS)) {
                 enclosing.classList?.add?.(HIDDEN_CLASS);
               }
@@ -1341,21 +1446,103 @@
                 enclosing.setAttribute?.("data-feedrule-hidden", "true");
               }
               pauseVideosInContainer(enclosing);
-              // Class mutation on an already-hidden post: do not queue for re-scanning
-              continue;
-            } else if (!decision?.hide || userRevealedPostIds.has(currentPostId)) {
-              // Class mutation on an already-shown post: do not queue for re-scanning
-              if (m.attributeName === "class") {
-                continue;
-              }
             }
+            // Class mutation on an already-classified post never triggers a scan
+            performanceStats.ignoredMutations++;
+            continue;
           }
   
-          mutationQueue.add(enclosing);
-          sawAdditions = true;
+          // Class mutations on unclassified nodes do not trigger scans
+          performanceStats.ignoredMutations++;
+          continue;
+        }
+  
+        // Case B: Identity Attributes (data-urn, data-id, data-chameleon-urn)
+        if (attrName === "data-urn" || attrName === "data-id" || attrName === "data-chameleon-urn") {
+          performanceStats.identityMutations++;
+          const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
+          if (enclosing) {
+            mutationQueue.add(enclosing);
+            sawAdditions = true;
+            performanceStats.relevantMutations++;
+          }
+          continue;
+        }
+  
+        performanceStats.ignoredMutations++;
+        continue;
+      }
+  
+      // Case C: ChildList Mutations
+      if (m.type === "childList") {
+        performanceStats.childListMutations++;
+        for (const node of m.addedNodes || []) {
+          if (!node || node.nodeType !== 1) continue;
+  
+          if (!isRelevantFeedScope(node)) {
+            performanceStats.ignoredMutations++;
+            continue;
+          }
+  
+          // Check if added node is inside an existing post container
+          const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
+          if (enclosing) {
+            const currentPostId = nodeToPostId.get(enclosing);
+            if (currentPostId && decisionsById.has(currentPostId)) {
+              const decision = decisionsById.get(currentPostId);
+              if (
+                decision?.hide &&
+                !userRevealedPostIds.has(currentPostId) &&
+                enclosing.dataset?.feedruleUserRevealed !== "1"
+              ) {
+                // Synchronously maintain hidden attributes
+                if (!enclosing.classList?.contains?.(HIDDEN_CLASS)) {
+                  enclosing.classList?.add?.(HIDDEN_CLASS);
+                }
+                if (enclosing.getAttribute?.("data-feedrule-hidden") !== "true") {
+                  enclosing.setAttribute?.("data-feedrule-hidden", "true");
+                }
+                // If added node is or contains video, pause directly
+                if (node.tagName === "VIDEO") {
+                  pauseSingleVideo(node);
+                } else {
+                  pauseVideosInContainer(node);
+                }
+                performanceStats.ignoredMutations++;
+                continue; // Do NOT queue already-hidden post
+              }
+            }
+            // Unclassified enclosing post container
+            mutationQueue.add(enclosing);
+            sawAdditions = true;
+            performanceStats.relevantMutations++;
+            continue;
+          }
+  
+          // Node is NOT inside an existing post container. Is it a post container candidate or feed root?
+          if (node.matches?.(COMBINED_CONTAINER_SELECTOR) || isFeedContainerRoot(node)) {
+            mutationQueue.add(node);
+            sawAdditions = true;
+            performanceStats.relevantMutations++;
+          } else {
+            // Check if it contains candidate post containers
+            const hasPosts = node.querySelector?.(COMBINED_CONTAINER_SELECTOR);
+            if (hasPosts) {
+              mutationQueue.add(node);
+              sawAdditions = true;
+              performanceStats.relevantMutations++;
+            } else {
+              performanceStats.ignoredMutations++;
+            }
+          }
         }
       }
     }
+  
+    if (mutationQueue.size > performanceStats.mutationQueueMaxSize) {
+      performanceStats.mutationQueueMaxSize = mutationQueue.size;
+    }
+  
     if (sawAdditions) {
       clearTimeout(mutationTimer);
       mutationTimer = setTimeout(processMutationQueue, MUTATION_BUFFER_MS);
@@ -1369,14 +1556,21 @@
     clearTimeout(flushTimer);
     flushTimer = setTimeout(flush, 0);
   
+    // Dynamic feed root resolution: attach to feed root if available, otherwise document.body
+    const feedRoot =
+      document.querySelector("main.scaffold-layout__main") ||
+      document.querySelector("div[data-testid='mainFeed']") ||
+      document.querySelector(".scaffold-finite-scroll") ||
+      document.body;
+  
     const observer = new MutationObserver(handleMutations);
   
-    observer.observe(document.body, {
+    observer.observe(feedRoot, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
     });
-    logger.debug("CONTENT", "MutationObserver attached with targeted attribute filter and enclosing-container resolution");
+    logger.debug("CONTENT", "MutationObserver attached with scoped feed filter and enclosing-container resolution");
   }
 })();
