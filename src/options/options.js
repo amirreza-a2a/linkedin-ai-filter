@@ -1,7 +1,12 @@
 // src/options/options.js
-import { getSettings, setSettings, getPrimaryApiKey } from "../storage/rules-store.js";
+// FeedRule Settings & Observability Control Center.
+// Manages multi-key configuration pools, runtime health indicators, connection testing, and persistent API logs.
+
+import { getSettings, setSettings, getPrimaryApiKey, normalizeApiKeys } from "../storage/rules-store.js";
 import { validateAndNormalizeBaseUrl, getRequiredOriginPattern } from "../llm/url-helper.js";
 import { testProviderConnection } from "../llm/test-connection.js";
+import { getKeyPoolStatus } from "../llm/key-scheduler.js";
+import { getApiLogs, getApiLogStats, clearApiLogs } from "../storage/api-log-store.js";
 import {
   clearSavedPostsData,
   clearDecisionLogData,
@@ -37,10 +42,215 @@ export const els = {
   get geminiTestStatus() { return getEl("geminiTestStatus"); },
   get testClaudeBtn() { return getEl("testClaudeBtn"); },
   get claudeTestStatus() { return getEl("claudeTestStatus"); },
+
+  // Multi-key lists & add buttons
+  get openaiKeyList() { return getEl("openaiKeyList"); },
+  get addOpenaiKeyBtn() { return getEl("addOpenaiKeyBtn"); },
+  get geminiKeyList() { return getEl("geminiKeyList"); },
+  get addGeminiKeyBtn() { return getEl("addGeminiKeyBtn"); },
+  get claudeKeyList() { return getEl("claudeKeyList"); },
+  get addClaudeKeyBtn() { return getEl("addClaudeKeyBtn"); },
+
+  // API Activity & Observability elements
+  get kpiTotalRequests() { return getEl("kpiTotalRequests"); },
+  get kpiSuccessRate() { return getEl("kpiSuccessRate"); },
+  get kpiAvgLatency() { return getEl("kpiAvgLatency"); },
+  get kpiFailoverRate() { return getEl("kpiFailoverRate"); },
+  get filterProvider() { return getEl("filterProvider"); },
+  get filterStatus() { return getEl("filterStatus"); },
+  get searchApiLogs() { return getEl("searchApiLogs"); },
+  get refreshApiLogsBtn() { return getEl("refreshApiLogsBtn"); },
+  get clearApiLogsBtn() { return getEl("clearApiLogsBtn"); },
+  get apiLogActionStatus() { return getEl("apiLogActionStatus"); },
+  get apiLogList() { return getEl("apiLogList"); },
+};
+
+// In-memory multi-key storage cache across provider sections
+const providerKeyPools = {
+  openai: [],
+  gemini: [],
+  claude: [],
 };
 
 // In-flight connection tests tracker
 const inFlightTests = new Set();
+
+/**
+ * Escapes HTML characters for safe text insertion.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  if (!str || typeof str !== "string") return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+/**
+ * Formats a numeric timestamp to a localized HH:MM:SS string.
+ *
+ * @param {number} ts
+ * @returns {string}
+ */
+function formatTimestamp(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toTimeString().split(" ")[0];
+}
+
+/**
+ * Collects all current API keys for a provider from DOM input rows or legacy element.
+ *
+ * @param {"openai"|"gemini"|"claude"} provider
+ * @returns {string[]}
+ */
+export function collectKeysFromDom(provider) {
+  if (typeof document === "undefined") return providerKeyPools[provider] || [];
+  const listEl = getEl(`${provider}KeyList`);
+  if (listEl && listEl.querySelectorAll) {
+    const inputs = listEl.querySelectorAll(".key-input");
+    if (inputs.length > 0) {
+      const keys = [];
+      inputs.forEach((input) => keys.push(input.value));
+      return keys;
+    }
+  }
+
+  // Fallback to legacy single element if present
+  const legacyEl = getEl(`${provider}Key`);
+  if (legacyEl && legacyEl.value) {
+    return [legacyEl.value];
+  }
+
+  return providerKeyPools[provider] || [];
+}
+
+/**
+ * Renders the multi-key pool for a provider into its DOM container.
+ *
+ * @param {"openai"|"gemini"|"claude"} provider
+ * @param {string[]} [keys] - Keys to render (if omitted, collects from DOM or in-memory state)
+ */
+export function renderKeyPool(provider, keys) {
+  if (typeof document === "undefined") return;
+  const listEl = getEl(`${provider}KeyList`);
+
+  const currentKeys = keys !== undefined ? keys : collectKeysFromDom(provider);
+  providerKeyPools[provider] = currentKeys;
+
+  // Sync hidden legacy input for single-key backward compatibility / tests
+  const legacyEl = getEl(`${provider}Key`);
+  if (legacyEl) {
+    legacyEl.value = currentKeys[0] || "";
+  }
+
+  if (!listEl) return;
+
+  // Get ephemeral runtime health from key-scheduler
+  const healthStatus = getKeyPoolStatus(provider, currentKeys);
+
+  listEl.innerHTML = "";
+
+  if (currentKeys.length === 0) {
+    const emptyMsg = document.createElement("div");
+    emptyMsg.className = "empty-keys-msg";
+    emptyMsg.textContent = "No API keys configured";
+    listEl.appendChild(emptyMsg);
+    return;
+  }
+
+  currentKeys.forEach((key, idx) => {
+    const health = healthStatus[idx] || { status: "healthy", cooldownRemainingMs: 0 };
+
+    const row = document.createElement("div");
+    row.className = "key-row";
+    row.setAttribute("data-key-index", String(idx));
+
+    let healthClass = "health-healthy";
+    let healthLabel = "● Healthy";
+
+    if (health.status === "invalid") {
+      healthClass = "health-invalid";
+      healthLabel = "✕ Invalid";
+    } else if (health.status === "cooldown") {
+      healthClass = "health-cooldown";
+      const secs = Math.ceil((health.cooldownRemainingMs || 0) / 1000);
+      healthLabel = `◷ Cooldown · ${secs}s`;
+    }
+
+    const providerLabel = provider === "openai" ? "OpenAI" : provider === "gemini" ? "Gemini" : "Claude";
+
+    row.innerHTML = `
+      <div class="key-row-meta">
+        <span class="key-index-label">Key #${idx + 1}</span>
+        <span class="key-health-badge ${healthClass}">${escapeHtml(healthLabel)}</span>
+      </div>
+      <div class="key-input-row">
+        <input
+          type="password"
+          class="key-input"
+          placeholder="Enter ${escapeHtml(providerLabel)} API key"
+          aria-label="${escapeHtml(providerLabel)} Key #${idx + 1}"
+          value="${escapeHtml(key)}"
+        />
+        <button
+          type="button"
+          class="btn-remove-key"
+          aria-label="Remove ${escapeHtml(providerLabel)} Key #${idx + 1}"
+          title="Remove Key #${idx + 1}"
+        >×</button>
+      </div>
+    `;
+
+    // Remove key listener
+    const removeBtn = row.querySelector(".btn-remove-key");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => {
+        const latestKeys = collectKeysFromDom(provider);
+        latestKeys.splice(idx, 1);
+        renderKeyPool(provider, latestKeys);
+      });
+    }
+
+    // Input change listener to keep in-memory pool synced
+    const inputEl = row.querySelector(".key-input");
+    if (inputEl) {
+      inputEl.addEventListener("input", () => {
+        providerKeyPools[provider][idx] = inputEl.value;
+        if (idx === 0 && legacyEl) {
+          legacyEl.value = inputEl.value;
+        }
+      });
+    }
+
+    listEl.appendChild(row);
+  });
+}
+
+/**
+ * Adds a new empty API key row to the specified provider pool.
+ *
+ * @param {"openai"|"gemini"|"claude"} provider
+ */
+export function addKeyRow(provider) {
+  const currentKeys = collectKeysFromDom(provider);
+  currentKeys.push("");
+  renderKeyPool(provider, currentKeys);
+
+  // Focus the newly created input
+  const listEl = getEl(`${provider}KeyList`);
+  if (listEl && listEl.querySelectorAll) {
+    const inputs = listEl.querySelectorAll(".key-input");
+    if (inputs.length > 0) {
+      inputs[inputs.length - 1].focus();
+    }
+  }
+}
 
 /**
  * Handles executing a connection test for a specific provider using current DOM values.
@@ -67,19 +277,23 @@ export async function handleTestConnection(provider, btn, statusEl) {
 
   try {
     let apiKey = "";
+    const domKeys = collectKeysFromDom(provider);
+    if (domKeys.length > 0 && domKeys[0]) {
+      apiKey = domKeys[0].trim();
+    } else if (els[`${provider}Key`]?.value) {
+      apiKey = els[`${provider}Key`].value.trim();
+    }
+
     let model = "";
     let baseUrl = "";
 
     if (provider === "openai") {
-      apiKey = els.openaiKey ? els.openaiKey.value : "";
       model = els.openaiModel ? els.openaiModel.value : "";
       baseUrl = els.openaiBaseUrl ? els.openaiBaseUrl.value : "";
     } else if (provider === "gemini") {
-      apiKey = els.geminiKey ? els.geminiKey.value : "";
       model = els.geminiModel ? els.geminiModel.value : "";
       baseUrl = els.geminiBaseUrl ? els.geminiBaseUrl.value : "";
     } else if (provider === "claude") {
-      apiKey = els.claudeKey ? els.claudeKey.value : "";
       model = els.claudeModel ? els.claudeModel.value : "";
       baseUrl = els.claudeBaseUrl ? els.claudeBaseUrl.value : "";
     }
@@ -100,6 +314,11 @@ export async function handleTestConnection(provider, btn, statusEl) {
         statusEl.className = "test-conn-status status-error";
       }
     }
+
+    // Refresh observability logs & key health indicators
+    renderApiLogs();
+    renderApiLogStats();
+    renderKeyPool(provider);
 
     return result;
   } catch (err) {
@@ -142,12 +361,160 @@ export function updateProviderVisibility(activeProvider) {
   });
 }
 
+/**
+ * Renders KPI cards from persistent API log metrics.
+ */
+export async function renderApiLogStats() {
+  if (typeof document === "undefined") return;
+  try {
+    const stats = await getApiLogStats();
+    if (els.kpiTotalRequests) {
+      els.kpiTotalRequests.textContent = String(stats.totalRequests24h || 0);
+    }
+    if (els.kpiSuccessRate) {
+      els.kpiSuccessRate.textContent = `${stats.successRate ?? 100}%`;
+    }
+    if (els.kpiAvgLatency) {
+      els.kpiAvgLatency.textContent = `${stats.avgLogicalLatencyMs || 0} ms`;
+    }
+    if (els.kpiFailoverRate) {
+      els.kpiFailoverRate.textContent = `${stats.failoverRate || 0}%`;
+    }
+  } catch (err) {
+    logger.warn("OPTIONS", "Failed to render API log stats:", err);
+  }
+}
+
+/**
+ * Renders filtered logical request records in chronological (newest first) accordion list.
+ */
+export async function renderApiLogs() {
+  if (typeof document === "undefined" || !els.apiLogList) return;
+
+  const providerFilter = els.filterProvider ? els.filterProvider.value : "all";
+  const statusFilter = els.filterStatus ? els.filterStatus.value : "all";
+  const searchFilter = els.searchApiLogs ? els.searchApiLogs.value : "";
+
+  try {
+    const logs = await getApiLogs({
+      provider: providerFilter,
+      status: statusFilter,
+      search: searchFilter,
+      limit: 100,
+    });
+
+    els.apiLogList.innerHTML = "";
+
+    if (logs.length === 0) {
+      const emptyDiv = document.createElement("div");
+      emptyDiv.className = "empty-logs-msg";
+      emptyDiv.textContent = "No API activity records found.";
+      els.apiLogList.appendChild(emptyDiv);
+      return;
+    }
+
+    logs.forEach((record) => {
+      const card = document.createElement("div");
+      card.className = "log-card";
+      card.setAttribute("data-correlation-id", record.correlationId);
+
+      const statusBadgeClass = record.ok ? "status-ok" : "status-err";
+      const statusBadgeText = record.ok ? "✓ Success" : "✕ Error";
+      const attemptsCountText = `${record.totalAttempts || 1} ${
+        (record.totalAttempts || 1) === 1 ? "attempt" : "attempts"
+      }`;
+      const isTestOp = record.operation === "testConnection";
+
+      const attemptsHtml = (record.attempts || [])
+        .map((att) => {
+          const itemClass = att.ok ? "attempt-ok" : "attempt-err";
+          const keyLabel = att.keyLabel || `Key #${(att.keyIndex || 0) + 1}`;
+          const codeHtml = att.errorCode ? `<div class="attempt-code"><code>${escapeHtml(att.errorCode)}</code></div>` : "";
+          const msgHtml = att.errorMessage ? `<div class="attempt-msg">${escapeHtml(att.errorMessage)}</div>` : "";
+
+          return `
+            <div class="attempt-item ${itemClass}">
+              <div class="attempt-header">
+                <span class="attempt-index">Attempt ${(att.attemptIndex || 0) + 1}</span>
+                <span class="attempt-key">${escapeHtml(keyLabel)}</span>
+                <span class="attempt-status">HTTP ${att.status || 0}</span>
+                <span class="attempt-latency">${att.latencyMs || 0} ms</span>
+              </div>
+              ${codeHtml}
+              ${msgHtml}
+            </div>
+          `;
+        })
+        .join("");
+
+      const errorBannerHtml =
+        !record.ok && record.finalErrorMessage
+          ? `<div class="log-error-banner">${escapeHtml(record.finalErrorMessage)}</div>`
+          : "";
+
+      card.innerHTML = `
+        <button
+          type="button"
+          class="log-card-header"
+          aria-expanded="false"
+          aria-controls="details-${escapeHtml(record.correlationId)}"
+        >
+          <div class="log-card-summary">
+            <div class="log-card-meta">
+              <span class="log-ts">${escapeHtml(formatTimestamp(record.ts))}</span>
+              <span class="log-provider-tag">${escapeHtml(record.provider)} · ${escapeHtml(record.model || "default")}</span>
+              ${isTestOp ? '<span class="log-op-tag">Test</span>' : ""}
+            </div>
+            <div class="log-card-result">
+              <span class="log-status-badge ${statusBadgeClass}">${statusBadgeText}</span>
+              <span class="log-attempts-tag">${escapeHtml(attemptsCountText)}</span>
+              <span class="log-latency-tag">${record.logicalLatencyMs || 0} ms</span>
+              <span class="accordion-icon" aria-hidden="true">▾</span>
+            </div>
+          </div>
+        </button>
+        <div class="log-card-body" id="details-${escapeHtml(record.correlationId)}" hidden>
+          ${errorBannerHtml}
+          <div class="attempt-timeline">
+            ${attemptsHtml}
+          </div>
+        </div>
+      `;
+
+      const headerBtn = card.querySelector(".log-card-header");
+      const bodyDiv = card.querySelector(".log-card-body");
+
+      if (headerBtn && bodyDiv) {
+        headerBtn.addEventListener("click", () => {
+          const isExpanded = headerBtn.getAttribute("aria-expanded") === "true";
+          headerBtn.setAttribute("aria-expanded", String(!isExpanded));
+          if (isExpanded) {
+            bodyDiv.setAttribute("hidden", "");
+          } else {
+            bodyDiv.removeAttribute("hidden");
+          }
+        });
+      }
+
+      els.apiLogList.appendChild(card);
+    });
+  } catch (err) {
+    logger.warn("OPTIONS", "Failed to render API logs:", err);
+  }
+}
+
 export async function load() {
   const s = await getSettings();
+  const normalizedKeys = normalizeApiKeys(s.apiKeys);
+
+  providerKeyPools.openai = normalizedKeys.openai;
+  providerKeyPools.gemini = normalizedKeys.gemini;
+  providerKeyPools.claude = normalizedKeys.claude;
+
   if (els.provider) els.provider.value = s.provider;
-  if (els.openaiKey) els.openaiKey.value = getPrimaryApiKey(s.apiKeys, "openai");
-  if (els.geminiKey) els.geminiKey.value = getPrimaryApiKey(s.apiKeys, "gemini");
-  if (els.claudeKey) els.claudeKey.value = getPrimaryApiKey(s.apiKeys, "claude");
+  if (els.openaiKey) els.openaiKey.value = normalizedKeys.openai[0] || "";
+  if (els.geminiKey) els.geminiKey.value = normalizedKeys.gemini[0] || "";
+  if (els.claudeKey) els.claudeKey.value = normalizedKeys.claude[0] || "";
   if (els.openaiModel) els.openaiModel.value = s.model?.openai || "gpt-4o-mini";
   if (els.geminiModel) els.geminiModel.value = s.model?.gemini || "gemini-3.5-flash";
   if (els.claudeModel) els.claudeModel.value = s.model?.claude || "claude-haiku-4-5-20251001";
@@ -156,7 +523,16 @@ export async function load() {
   if (els.claudeBaseUrl) els.claudeBaseUrl.value = s.baseUrl?.claude || "";
   if (els.dailyCap) els.dailyCap.value = s.dailyCallCap || 500;
 
+  // Render multi-key pools
+  renderKeyPool("openai", normalizedKeys.openai);
+  renderKeyPool("gemini", normalizedKeys.gemini);
+  renderKeyPool("claude", normalizedKeys.claude);
+
   updateProviderVisibility(s.provider);
+
+  // Render API activity & statistics
+  await renderApiLogStats();
+  await renderApiLogs();
 }
 
 function setStatus(msg, isError = false) {
@@ -179,6 +555,17 @@ function setDataStatus(msg, isError = false) {
   }, 3500);
 }
 
+function setApiLogActionStatus(msg, isError = false) {
+  if (!els.apiLogActionStatus) return;
+  els.apiLogActionStatus.textContent = msg;
+  els.apiLogActionStatus.style.color = isError ? "#b91c1c" : "#15803d";
+  setTimeout(() => {
+    if (els.apiLogActionStatus && els.apiLogActionStatus.textContent === msg) {
+      els.apiLogActionStatus.textContent = "";
+    }
+  }, 3500);
+}
+
 if (typeof document !== "undefined") {
   if (els.provider) {
     els.provider.addEventListener("change", () => {
@@ -186,24 +573,73 @@ if (typeof document !== "undefined") {
     });
   }
 
+  // Add Key Button Listeners
+  if (els.addOpenaiKeyBtn) {
+    els.addOpenaiKeyBtn.addEventListener("click", () => addKeyRow("openai"));
+  }
+  if (els.addGeminiKeyBtn) {
+    els.addGeminiKeyBtn.addEventListener("click", () => addKeyRow("gemini"));
+  }
+  if (els.addClaudeKeyBtn) {
+    els.addClaudeKeyBtn.addEventListener("click", () => addKeyRow("claude"));
+  }
+
+  // Test Connection Buttons
   if (els.testOpenAiBtn) {
     els.testOpenAiBtn.addEventListener("click", () => {
       handleTestConnection("openai", els.testOpenAiBtn, els.openaiTestStatus);
     });
   }
-
   if (els.testGeminiBtn) {
     els.testGeminiBtn.addEventListener("click", () => {
       handleTestConnection("gemini", els.testGeminiBtn, els.geminiTestStatus);
     });
   }
-
   if (els.testClaudeBtn) {
     els.testClaudeBtn.addEventListener("click", () => {
       handleTestConnection("claude", els.testClaudeBtn, els.claudeTestStatus);
     });
   }
 
+  // API Log Filter & Action Listeners
+  if (els.filterProvider) {
+    els.filterProvider.addEventListener("change", () => renderApiLogs());
+  }
+  if (els.filterStatus) {
+    els.filterStatus.addEventListener("change", () => renderApiLogs());
+  }
+  if (els.searchApiLogs) {
+    els.searchApiLogs.addEventListener("input", () => renderApiLogs());
+  }
+  if (els.refreshApiLogsBtn) {
+    els.refreshApiLogsBtn.addEventListener("click", async () => {
+      await renderApiLogStats();
+      await renderApiLogs();
+      renderKeyPool("openai");
+      renderKeyPool("gemini");
+      renderKeyPool("claude");
+      setApiLogActionStatus("API logs refreshed ✓");
+    });
+  }
+  if (els.clearApiLogsBtn) {
+    els.clearApiLogsBtn.addEventListener("click", async () => {
+      const confirmed = window.confirm(
+        "Are you sure you want to clear API activity logs? This cannot be undone."
+      );
+      if (!confirmed) return;
+      try {
+        await clearApiLogs();
+        await renderApiLogStats();
+        await renderApiLogs();
+        setApiLogActionStatus("API activity logs cleared ✓");
+      } catch (err) {
+        logger.error("OPTIONS", "Failed to clear API logs:", err);
+        setApiLogActionStatus("Failed to clear API logs.", true);
+      }
+    });
+  }
+
+  // Save Settings
   if (els.saveBtn) {
     els.saveBtn.addEventListener("click", async () => {
       // 1. Validate Base URLs
@@ -259,7 +695,12 @@ if (typeof document !== "undefined") {
         }
       }
 
-      // 3. Persist settings (preserving all provider configurations)
+      // 3. Collect and normalize keys from all provider pools
+      const rawOpenaiKeys = collectKeysFromDom("openai");
+      const rawGeminiKeys = collectKeysFromDom("gemini");
+      const rawClaudeKeys = collectKeysFromDom("claude");
+
+      // 4. Persist settings (preserving all provider configurations)
       await setSettings({
         provider: selectedProvider,
         model: {
@@ -274,11 +715,21 @@ if (typeof document !== "undefined") {
         },
         dailyCallCap: parseInt(els.dailyCap ? els.dailyCap.value : "500", 10) || 500,
         apiKeys: {
-          openai: els.openaiKey ? els.openaiKey.value.trim() : "",
-          gemini: els.geminiKey ? els.geminiKey.value.trim() : "",
-          claude: els.claudeKey ? els.claudeKey.value.trim() : "",
+          openai: rawOpenaiKeys,
+          gemini: rawGeminiKeys,
+          claude: rawClaudeKeys,
         },
       });
+
+      // Re-render pools with normalized saved keys
+      const updated = await getSettings();
+      providerKeyPools.openai = updated.apiKeys.openai;
+      providerKeyPools.gemini = updated.apiKeys.gemini;
+      providerKeyPools.claude = updated.apiKeys.claude;
+
+      renderKeyPool("openai", updated.apiKeys.openai);
+      renderKeyPool("gemini", updated.apiKeys.gemini);
+      renderKeyPool("claude", updated.apiKeys.claude);
 
       setStatus("Saved ✓", false);
     });
@@ -336,7 +787,7 @@ if (typeof document !== "undefined") {
   if (els.clearAllBtn) {
     els.clearAllBtn.addEventListener("click", async () => {
       const confirmed = window.confirm(
-        "⚠️ WARNING: This will permanently delete ALL local data stored by FeedRule in this browser, including your API keys, daily usage counters, classification cache, decision log, and Second Brain saved posts.\n\nAre you sure you want to perform a full reset?"
+        "⚠️ WARNING: This will permanently delete ALL local data stored by FeedRule in this browser, including your API keys, daily usage counters, classification cache, decision log, Second Brain saved posts, and API activity logs.\n\nAre you sure you want to perform a full reset?"
       );
       if (!confirmed) return;
       try {
