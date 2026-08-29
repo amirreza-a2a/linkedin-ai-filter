@@ -1,5 +1,6 @@
 // src/content/content-index.js
 // Feed watcher & DOM filter for LinkedIn feed using standard ES modules.
+// Identity-aware incremental reprocessing for initial load, Load More, and container reuse.
 
 import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
@@ -90,8 +91,8 @@ export function extractPost(el) {
   let id =
     el.getAttribute?.("data-urn") ||
     el.getAttribute?.("data-id") ||
-    el.querySelector("[data-urn*='activity:']")?.getAttribute?.("data-urn") ||
-    el.querySelector("[data-urn*='ugcPost:']")?.getAttribute?.("data-urn") ||
+    el.querySelector?.("[data-urn*='activity:']")?.getAttribute?.("data-urn") ||
+    el.querySelector?.("[data-urn*='ugcPost:']")?.getAttribute?.("data-urn") ||
     "";
 
   // Level 2: Extract verified URN from permalink if available
@@ -159,17 +160,29 @@ export function findContainers(root) {
 }
 
 // --- DOM filtering ---------------------------------------------------
-function applyDecision(el, decision) {
+export function applyDecision(el, decision) {
+  if (!el || !decision) return;
+
+  decisionsById.set(decision.id, decision);
+  processedPostIds.add(decision.id);
+  inFlightPostIds.delete(decision.id);
+
   if (!decision.hide) {
-    el.classList.remove(HIDDEN_CLASS);
+    el.classList?.remove?.(HIDDEN_CLASS);
+    if (el.dataset?.feedruleWrapped) {
+      delete el.dataset.feedruleWrapped;
+      const placeholder = el.querySelector?.(".feedrule-placeholder");
+      if (placeholder?.remove) placeholder.remove();
+    }
     return;
   }
-  if (el.classList.contains(HIDDEN_CLASS)) return;
 
-  el.classList.add(HIDDEN_CLASS);
+  if (el.classList?.contains?.(HIDDEN_CLASS) && el.dataset?.feedruleWrapped) return;
 
-  if (!el.dataset.feedruleWrapped) {
-    el.dataset.feedruleWrapped = "1";
+  el.classList?.add?.(HIDDEN_CLASS);
+
+  if (!el.dataset?.feedruleWrapped && typeof document !== "undefined") {
+    if (el.dataset) el.dataset.feedruleWrapped = "1";
     const placeholder = document.createElement("div");
     placeholder.className = "feedrule-placeholder";
 
@@ -182,17 +195,28 @@ function applyDecision(el, decision) {
     showBtn.type = "button";
     showBtn.className = "feedrule-show-btn";
     showBtn.textContent = "Show anyway";
-    showBtn.addEventListener("click", () => el.classList.remove(HIDDEN_CLASS));
+    if (showBtn.addEventListener) {
+      showBtn.addEventListener("click", () => el.classList?.remove?.(HIDDEN_CLASS));
+    }
 
     placeholder.appendChild(label);
     placeholder.appendChild(showBtn);
-    el.prepend(placeholder);
+    if (el.prepend) {
+      el.prepend(placeholder);
+    } else if (el.insertBefore && el.firstChild) {
+      el.insertBefore(placeholder, el.firstChild);
+    } else if (el.appendChild) {
+      el.appendChild(placeholder);
+    }
   }
 }
 
 // --- Feed watcher & Request Queue --------------------------------------
-const elementById = new Map();
-const seen = new WeakSet();
+const elementById = new Map(); // postId -> Element
+const nodeToPostId = new WeakMap(); // Element -> postId (tracks current post on this DOM node)
+const decisionsById = new Map(); // postId -> decision object
+const inFlightPostIds = new Set(); // postId currently queued or in-flight
+const processedPostIds = new Set(); // postId already classified
 let pending = [];
 let flushTimer = null;
 const DEBOUNCE_MS = 600;
@@ -200,6 +224,26 @@ const BATCH_SIZE = 8;
 
 const batchQueue = [];
 let isProcessingQueue = false;
+
+// Inspection helpers for unit/regression testing
+export function getPendingPosts() { return [...pending]; }
+export function getCachedDecisions() { return new Map(decisionsById); }
+export function getInFlightPostIds() { return new Set(inFlightPostIds); }
+
+export function resetContentState() {
+  elementById.clear();
+  decisionsById.clear();
+  inFlightPostIds.clear();
+  processedPostIds.clear();
+  pending = [];
+  batchQueue.length = 0;
+  isProcessingQueue = false;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = null;
+  if (mutationTimer) clearTimeout(mutationTimer);
+  mutationTimer = null;
+  mutationQueue.clear();
+}
 
 function sendBatchMessage(batch, callback) {
   if (!batch || batch.length === 0) {
@@ -227,20 +271,28 @@ function sendBatchMessage(batch, callback) {
             "background message status:",
             chrome.runtime.lastError.message
           );
+          for (const post of batch) inFlightPostIds.delete(post.id);
           callback();
           return;
         }
         logger.debug("CONTENT", "got response from background:", response);
         const results = response?.results || [];
         for (const decision of results) {
+          decisionsById.set(decision.id, decision);
+          processedPostIds.add(decision.id);
+          inFlightPostIds.delete(decision.id);
+
           const el = elementById.get(decision.id);
-          if (el) applyDecision(el, decision);
+          if (el && nodeToPostId.get(el) === decision.id) {
+            applyDecision(el, decision);
+          }
         }
         callback();
       }
     );
   } catch (err) {
     logger.warn("CONTENT", "extension context disconnected:", err);
+    for (const post of batch) inFlightPostIds.delete(post.id);
     callback();
   }
 }
@@ -271,7 +323,7 @@ async function processQueue() {
   }
 }
 
-function flush() {
+export function flush() {
   if (pending.length === 0) return;
   const batch = pending.splice(0, pending.length);
   for (let i = 0; i < batch.length; i += BATCH_SIZE) {
@@ -280,12 +332,23 @@ function flush() {
   processQueue();
 }
 
+/**
+ * Scans a DOM root or subtree for candidate posts.
+ * Utilizes identity-aware deduplication to support initial load, Load More, and container reuse.
+ *
+ * @param {Element|Object} root
+ */
 export function scan(root) {
   const nodes = findContainers(root);
-  for (const node of nodes) {
-    if (seen.has(node)) continue;
-    seen.add(node);
 
+  if (isDebugEnabled()) {
+    logger.debug(
+      "CONTENT",
+      `[SCAN] root=${root?.tagName || "UNKNOWN"} containersFound=${nodes.length}`
+    );
+  }
+
+  for (const node of nodes) {
     // Two-Stage Post Qualification Layer
     const qual = isLikelyPostContainer(node);
 
@@ -306,16 +369,66 @@ export function scan(root) {
 
     // Process ACCEPT and AMBIGUOUS candidates through extractPost
     const post = extractPost(node);
-    if (post) {
-      if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
-        logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
-      }
-      pending.push(post);
-    } else {
+    if (!post) {
       if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
         logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> REJECTED (no valid text or ID extracted)`);
       }
+      continue;
     }
+
+    if (isDebugEnabled() && qual.decision === "AMBIGUOUS") {
+      logger.debug("CONTENT", `AMBIGUOUS RESOLVED -> ACCEPTED (${post.id})`);
+    }
+
+    const prevPostIdOnNode = nodeToPostId.get(node);
+
+    // If node was previously used for a different post (DOM reuse), clean up previous state
+    if (prevPostIdOnNode && prevPostIdOnNode !== post.id) {
+      node.classList?.remove?.(HIDDEN_CLASS);
+      if (node.dataset?.feedruleWrapped) {
+        delete node.dataset.feedruleWrapped;
+        const oldPlaceholder = node.querySelector?.(".feedrule-placeholder");
+        if (oldPlaceholder?.remove) oldPlaceholder.remove();
+      }
+    }
+
+    // Associate current post ID with this DOM node
+    nodeToPostId.set(node, post.id);
+
+    // 1. Check if we already have a cached classification decision for this post identity
+    if (decisionsById.has(post.id)) {
+      const cachedDecision = decisionsById.get(post.id);
+      if (isDebugEnabled()) {
+        logger.debug(
+          "CONTENT",
+          `[POST] id=${post.id} decision=${cachedDecision.hide ? "HIDE" : "SHOW"} alreadyProcessed=true (cached)`
+        );
+      }
+      applyDecision(node, cachedDecision);
+      continue;
+    }
+
+    // 2. Check if this post is already in-flight (queued in pending or batchQueue)
+    if (inFlightPostIds.has(post.id)) {
+      if (isDebugEnabled()) {
+        logger.debug(
+          "CONTENT",
+          `[POST] id=${post.id} decision=PENDING alreadyProcessed=true (in-flight)`
+        );
+      }
+      // Update element mapping in case node reference changed
+      elementById.set(post.id, node);
+      continue;
+    }
+
+    // 3. Genuinely new post identity: queue for classification
+    if (isDebugEnabled()) {
+      logger.debug("CONTENT", `[POST] id=${post.id} decision=UNPROCESSED alreadyProcessed=false`);
+    }
+
+    inFlightPostIds.add(post.id);
+    elementById.set(post.id, node);
+    pending.push(post);
   }
 }
 
@@ -354,6 +467,48 @@ export function processMutationQueue() {
   }
 }
 
+/**
+ * Centralized MutationObserver handler.
+ * Observes child additions and targeted container attributes, resolving enclosing post containers.
+ *
+ * @param {MutationRecord[]} mutations
+ */
+export function handleMutations(mutations) {
+  let sawAdditions = false;
+  for (const m of mutations || []) {
+    if (isDebugEnabled()) {
+      logger.debug(
+        "CONTENT",
+        `[MUTATION] type=${m.type} target=${m.target?.tagName || "UNKNOWN"} addedElements=${m.addedNodes?.length || 0}`
+      );
+    }
+
+    if (m.type === "childList") {
+      for (const node of m.addedNodes || []) {
+        if (!node || node.nodeType !== 1) continue; // Node.ELEMENT_NODE
+        // If the added node is inside an existing container, add the enclosing container
+        const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
+        if (enclosing) {
+          mutationQueue.add(enclosing);
+        }
+        mutationQueue.add(node);
+        sawAdditions = true;
+      }
+    } else if (m.type === "attributes") {
+      const target = m.target;
+      if (target && target.nodeType === 1) {
+        const enclosing = target.closest?.(COMBINED_CONTAINER_SELECTOR) || target;
+        mutationQueue.add(enclosing);
+        sawAdditions = true;
+      }
+    }
+  }
+  if (sawAdditions) {
+    clearTimeout(mutationTimer);
+    mutationTimer = setTimeout(processMutationQueue, MUTATION_BUFFER_MS);
+  }
+}
+
 if (typeof document !== "undefined") {
   logger.debug("CONTENT", "running initial scan...");
   scan(document.body);
@@ -361,21 +516,13 @@ if (typeof document !== "undefined") {
   clearTimeout(flushTimer);
   flushTimer = setTimeout(flush, 0);
 
-  const observer = new MutationObserver((mutations) => {
-    let sawAdditions = false;
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        mutationQueue.add(node);
-        sawAdditions = true;
-      }
-    }
-    if (sawAdditions) {
-      clearTimeout(mutationTimer);
-      mutationTimer = setTimeout(processMutationQueue, MUTATION_BUFFER_MS);
-    }
-  });
+  const observer = new MutationObserver(handleMutations);
 
-  observer.observe(document.body, { childList: true, subtree: true });
-  logger.debug("CONTENT", "MutationObserver attached, watching for new posts with coalesced buffer");
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-urn", "data-id", "data-chameleon-urn", "class"],
+  });
+  logger.debug("CONTENT", "MutationObserver attached with targeted attribute filter and enclosing-container resolution");
 }
