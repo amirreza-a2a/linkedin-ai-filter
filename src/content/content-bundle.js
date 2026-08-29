@@ -17,7 +17,7 @@
       if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
       if (typeof localStorage !== "undefined" && localStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
     } catch {}
-    return true; // Always output trace diagnostics during audit
+    return false;
   };
   
   const logger = {
@@ -1297,6 +1297,10 @@
   }
   
   function flush() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
     if (pending.length === 0) return;
     const batch = pending.splice(0, pending.length);
     logger.trace("FLUSH", `count=${batch.length}`);

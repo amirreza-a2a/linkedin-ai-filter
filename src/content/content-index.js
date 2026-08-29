@@ -593,6 +593,10 @@ async function processQueue() {
 }
 
 export function flush() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
   if (pending.length === 0) return;
   const batch = pending.splice(0, pending.length);
   logger.trace("FLUSH", `count=${batch.length}`);

@@ -9,7 +9,7 @@ export const isDebugEnabled = () => {
     if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
     if (typeof localStorage !== "undefined" && localStorage.getItem("FEEDRULE_DEBUG") === "1") return true;
   } catch {}
-  return true; // Always output trace diagnostics during audit
+  return false;
 };
 
 export const logger = {
