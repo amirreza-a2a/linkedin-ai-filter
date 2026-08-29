@@ -73,7 +73,7 @@ export function shouldRenderNodeLabel(node, context = {}) {
 export class GraphRenderer {
   constructor(canvas, layout, options = {}) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+    this.ctx = canvas?.getContext ? canvas.getContext("2d") : null;
     this.layout = layout;
     this.onNodeClick = options.onNodeClick || (() => {});
     this.onNodeHover = options.onNodeHover || (() => {});
@@ -92,10 +92,15 @@ export class GraphRenderer {
     this.mouseDownY = 0;
     this.dragDistance = 0;
 
+    this._cachedActiveNodeId = null;
+    this._cachedConnectedIds = null;
+    this._cachedEdgeCount = 0;
+
     this.dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     this.animationFrameId = null;
     this.isRunning = false;
 
+    this._handlers = {};
     this.setupEvents();
     this.resize();
   }
@@ -116,8 +121,10 @@ export class GraphRenderer {
       }
     }
 
-    this.layout.width = w;
-    this.layout.height = h;
+    if (this.layout) {
+      this.layout.width = w;
+      this.layout.height = h;
+    }
     this.requestRender();
   }
 
@@ -127,9 +134,15 @@ export class GraphRenderer {
       this.draw();
       return;
     }
+    // Strict Single-Loop Invariant: If a frame is already queued, never spawn a duplicate loop
+    if (this.animationFrameId) return;
+
     const loop = () => {
-      if (!this.isRunning) return;
-      const isDone = this.layout.tick();
+      if (!this.isRunning) {
+        this.animationFrameId = null;
+        return;
+      }
+      const isDone = this.layout ? this.layout.tick() : true;
       this.draw();
       if (!isDone || this.draggedNode || this.isPanning) {
         this.animationFrameId = requestAnimationFrame(loop);
@@ -137,17 +150,40 @@ export class GraphRenderer {
         this.animationFrameId = null;
       }
     };
-    if (!this.animationFrameId) {
-      this.animationFrameId = requestAnimationFrame(loop);
-    }
+
+    this.animationFrameId = requestAnimationFrame(loop);
   }
 
   stop() {
     this.isRunning = false;
     if (this.animationFrameId && typeof cancelAnimationFrame !== "undefined") {
       cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
     }
+    this.animationFrameId = null;
+  }
+
+  destroy() {
+    this.stop();
+
+    const c = this.canvas;
+    if (c?.removeEventListener) {
+      if (this._handlers.onMouseDown) c.removeEventListener("mousedown", this._handlers.onMouseDown);
+      if (this._handlers.onClick) c.removeEventListener("click", this._handlers.onClick);
+      if (this._handlers.onWheel) c.removeEventListener("wheel", this._handlers.onWheel);
+    }
+
+    if (typeof window !== "undefined" && window.removeEventListener) {
+      if (this._handlers.onMouseMove) window.removeEventListener("mousemove", this._handlers.onMouseMove);
+      if (this._handlers.onMouseUp) window.removeEventListener("mouseup", this._handlers.onMouseUp);
+      if (this._handlers.onResize) window.removeEventListener("resize", this._handlers.onResize);
+    }
+
+    this._handlers = {};
+    this.hoveredNode = null;
+    this.selectedNode = null;
+    this.draggedNode = null;
+    this._cachedConnectedIds = null;
+    this._cachedActiveNodeId = null;
   }
 
   requestRender() {
@@ -160,7 +196,7 @@ export class GraphRenderer {
     this.panX = 0;
     this.panY = 0;
     this.zoom = 1.0;
-    this.layout.reheat(0.3);
+    if (this.layout) this.layout.reheat(0.3);
     this.requestRender();
   }
 
@@ -170,7 +206,7 @@ export class GraphRenderer {
    * @param {number} [padding=60]
    */
   fitGraph(padding = 60) {
-    const nodes = this.layout.nodes;
+    const nodes = this.layout?.nodes;
     if (!nodes || nodes.length === 0) {
       this.resetView();
       return;
@@ -210,12 +246,12 @@ export class GraphRenderer {
     this.panX = (w / 2 - graphCx) * fitZoom;
     this.panY = (h / 2 - graphCy) * fitZoom;
 
-    this.layout.reheat(0.15);
+    if (this.layout) this.layout.reheat(0.15);
     this.requestRender();
   }
 
   screenToWorld(screenX, screenY) {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.canvas?.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { left: 0, top: 0, width: 800, height: 600 };
     const x = screenX - rect.left;
     const y = screenY - rect.top;
     const cx = rect.width / 2;
@@ -227,6 +263,7 @@ export class GraphRenderer {
   }
 
   getNodeRadius(node) {
+    if (!node) return 7;
     if (node.type === "post") return 6.5;
     if (node.type === "topic") return Math.min(9 + (node.count || 1) * 1.5, 22);
     if (node.type === "author") return Math.min(8 + (node.count || 1) * 1.5, 19);
@@ -234,6 +271,7 @@ export class GraphRenderer {
   }
 
   findNodeAt(screenX, screenY) {
+    if (!this.layout?.nodes) return null;
     const { x, y } = this.screenToWorld(screenX, screenY);
     for (let i = this.layout.nodes.length - 1; i >= 0; i--) {
       const node = this.layout.nodes[i];
@@ -251,7 +289,7 @@ export class GraphRenderer {
     if (typeof window === "undefined" || !this.canvas?.addEventListener) return;
     const c = this.canvas;
 
-    c.addEventListener("mousedown", (e) => {
+    this._handlers.onMouseDown = (e) => {
       this.mouseDownX = e.clientX;
       this.mouseDownY = e.clientY;
       this.dragDistance = 0;
@@ -259,23 +297,23 @@ export class GraphRenderer {
       const hit = this.findNodeAt(e.clientX, e.clientY);
       if (hit) {
         this.draggedNode = hit;
-        this.layout.setNodePosition(hit.id, hit.x, hit.y, true);
+        if (this.layout) this.layout.setNodePosition(hit.id, hit.x, hit.y, true);
       } else {
         this.isPanning = true;
         this.panStartX = e.clientX - this.panX;
         this.panStartY = e.clientY - this.panY;
       }
       this.requestRender();
-    });
+    };
 
-    window.addEventListener("mousemove", (e) => {
+    this._handlers.onMouseMove = (e) => {
       const dx = e.clientX - this.mouseDownX;
       const dy = e.clientY - this.mouseDownY;
       this.dragDistance = Math.sqrt(dx * dx + dy * dy);
 
       if (this.draggedNode) {
         const { x, y } = this.screenToWorld(e.clientX, e.clientY);
-        this.layout.setNodePosition(this.draggedNode.id, x, y, true);
+        if (this.layout) this.layout.setNodePosition(this.draggedNode.id, x, y, true);
         this.requestRender();
       } else if (this.isPanning) {
         this.panX = e.clientX - this.panStartX;
@@ -290,11 +328,11 @@ export class GraphRenderer {
           this.requestRender();
         }
       }
-    });
+    };
 
-    window.addEventListener("mouseup", (e) => {
+    this._handlers.onMouseUp = (e) => {
       if (this.draggedNode) {
-        this.layout.releaseNode(this.draggedNode.id);
+        if (this.layout) this.layout.releaseNode(this.draggedNode.id);
         this.draggedNode = null;
         this.requestRender();
       }
@@ -302,45 +340,68 @@ export class GraphRenderer {
         this.isPanning = false;
         this.requestRender();
       }
-    });
+    };
 
-    c.addEventListener("click", (e) => {
-      // Ignore click if mouse was dragged more than 4px
+    this._handlers.onClick = (e) => {
       if (this.dragDistance < 5) {
         const hit = this.findNodeAt(e.clientX, e.clientY);
         this.selectedNode = hit;
         this.onNodeClick(hit);
         this.requestRender();
       }
-    });
+    };
 
-    c.addEventListener("wheel", (e) => {
+    this._handlers.onWheel = (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
       const newZoom = Math.max(0.15, Math.min(this.zoom * zoomFactor, 5.0));
 
-      const rect = c.getBoundingClientRect();
+      const rect = c.getBoundingClientRect ? c.getBoundingClientRect() : { left: 0, top: 0, width: 800, height: 600 };
       const mouseX = e.clientX - rect.left - rect.width / 2;
       const mouseY = e.clientY - rect.top - rect.height / 2;
 
-      // Mathematically exact cursor-anchored zoom transform
       this.panX = mouseX - (mouseX - this.panX) * (newZoom / this.zoom);
       this.panY = mouseY - (mouseY - this.panY) * (newZoom / this.zoom);
       this.zoom = newZoom;
 
       this.requestRender();
-    });
+    };
 
-    window.addEventListener("resize", () => this.resize());
+    this._handlers.onResize = () => this.resize();
+
+    c.addEventListener("mousedown", this._handlers.onMouseDown);
+    c.addEventListener("click", this._handlers.onClick);
+    c.addEventListener("wheel", this._handlers.onWheel);
+
+    window.addEventListener("mousemove", this._handlers.onMouseMove);
+    window.addEventListener("mouseup", this._handlers.onMouseUp);
+    window.addEventListener("resize", this._handlers.onResize);
   }
 
   getConnectedNodeIds(activeNode) {
     if (!activeNode) return null;
-    const connected = new Set([activeNode.id]);
-    for (const edge of this.layout.edges) {
-      if (edge.source === activeNode.id) connected.add(edge.target);
-      if (edge.target === activeNode.id) connected.add(edge.source);
+    const currentEdgeCount = this.layout?.edges?.length || 0;
+
+    // Hot-path memory optimization: reuse cached Set if active node and edge topology are unchanged
+    if (
+      this._cachedActiveNodeId === activeNode.id &&
+      this._cachedConnectedIds &&
+      this._cachedEdgeCount === currentEdgeCount
+    ) {
+      return this._cachedConnectedIds;
     }
+
+    const connected = new Set([activeNode.id]);
+    if (this.layout?.edges) {
+      for (const edge of this.layout.edges) {
+        if (edge.source === activeNode.id) connected.add(edge.target);
+        if (edge.target === activeNode.id) connected.add(edge.source);
+      }
+    }
+
+    this._cachedActiveNodeId = activeNode.id;
+    this._cachedConnectedIds = connected;
+    this._cachedEdgeCount = currentEdgeCount;
     return connected;
   }
 

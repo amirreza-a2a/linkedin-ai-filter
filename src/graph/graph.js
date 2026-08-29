@@ -15,6 +15,7 @@ import { GraphRenderer } from "./graph-renderer.js";
 import { getSavedPosts } from "../storage/saved-posts-store.js";
 import { escapeXml } from "../dashboard/charts.js";
 import { openExtensionPage } from "../navigation/navigation.js";
+import { logger } from "../utils/logger.js";
 
 // DOM Elements
 const canvas = document.getElementById("graphCanvas");
@@ -451,7 +452,7 @@ function updateGraph() {
   const isUnchanged = areGraphsEqual(activeGraph, graph);
   activeGraph = graph;
 
-  console.log("[FeedRule][GRAPH] graph state:", {
+  logger.debug("GRAPH", "graph state:", {
     nodes: activeGraph.nodes.length,
     edges: activeGraph.edges.length,
     isUnchanged,
@@ -527,7 +528,7 @@ function clearFilters() {
 
 async function init() {
   allSavedPosts = await getSavedPosts();
-  console.log("[FeedRule][GRAPH] loaded saved posts count:", allSavedPosts.length);
+  logger.debug("GRAPH", "loaded saved posts count:", allSavedPosts.length);
 
   populateFilterOptions(allSavedPosts);
 

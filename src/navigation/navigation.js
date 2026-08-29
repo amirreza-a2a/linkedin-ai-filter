@@ -1,7 +1,4 @@
-// src/navigation/navigation.js
-// Centralized, race-safe singleton navigation controller for FeedRule extension pages.
-// Ensures each internal page (Dashboard, Second Brain, Knowledge Graph, Options)
-// is opened in at most 1 tab per session, activating existing tabs without recreation.
+import { logger } from "../utils/logger.js";
 
 export const PAGE_PATHS = {
   dashboard: "src/dashboard/dashboard.html",
@@ -139,12 +136,12 @@ export function getCanonicalExtensionUrl(pageKeyOrPath) {
  * @returns {Promise<Object|null>} Resolved tab object
  */
 export async function openExtensionPage(pageKeyOrPath) {
-  console.log(`[FeedRule][NAV] requested page: ${pageKeyOrPath}`);
+  logger.debug("NAV", `requested page: ${pageKeyOrPath}`);
 
   // Never intercept external web URLs
   if (typeof pageKeyOrPath === "string" && /^https?:\/\//i.test(pageKeyOrPath.trim())) {
     const extUrl = pageKeyOrPath.trim();
-    console.log(`[FeedRule][NAV] external URL detected, opening in new tab: ${extUrl}`);
+    logger.debug("NAV", `external URL detected, opening in new tab: ${extUrl}`);
     if (typeof chrome !== "undefined" && chrome.tabs?.create) {
       return chrome.tabs.create({ url: extUrl });
     }
@@ -152,21 +149,21 @@ export async function openExtensionPage(pageKeyOrPath) {
   }
 
   const relPath = getCanonicalRelativePath(pageKeyOrPath);
-  console.log(`[FeedRule][NAV] canonical relative path: ${relPath}`);
+  logger.debug("NAV", `canonical relative path: ${relPath}`);
 
   if (!relPath) {
-    console.warn(`[FeedRule][NAV] Rejected unknown internal page key/path: "${pageKeyOrPath}"`);
+    logger.warn("NAV", `Rejected unknown internal page key/path: "${pageKeyOrPath}"`);
     return null;
   }
 
   const canonicalUrl = getCanonicalExtensionUrl(pageKeyOrPath);
   const canonicalPathname = normalizeExtensionPathname(relPath);
-  console.log(`[FeedRule][NAV] canonical extension URL: ${canonicalUrl}`);
-  console.log(`[FeedRule][NAV] normalized pathname: ${canonicalPathname}`);
+  logger.debug("NAV", `canonical extension URL: ${canonicalUrl}`);
+  logger.debug("NAV", `normalized pathname: ${canonicalPathname}`);
 
   // Per-page in-flight mutex: coalesce rapid clicks for the SAME page without blocking other pages
   if (inFlightNavigations.has(canonicalPathname)) {
-    console.log(`[FeedRule][NAV] in-flight navigation exists for ${canonicalPathname}, coalescing`);
+    logger.debug("NAV", `in-flight navigation exists for ${canonicalPathname}, coalescing`);
     return inFlightNavigations.get(canonicalPathname);
   }
 
@@ -181,7 +178,7 @@ export async function openExtensionPage(pageKeyOrPath) {
       try {
         matchingTabs = await chrome.tabs.query({ url: canonicalUrl });
       } catch (err) {
-        console.warn("[FeedRule][NAV] tabs.query by URL pattern failed:", err);
+        logger.warn("NAV", "tabs.query by URL pattern failed:", err);
       }
 
       // Fallback query to match tabs that might have query params, hash fragments, or pendingUrl
@@ -194,18 +191,18 @@ export async function openExtensionPage(pageKeyOrPath) {
             return normalizeExtensionPathname(rawUrl) === canonicalPathname;
           });
         } catch (err) {
-          console.warn("[FeedRule][NAV] allTabs query failed:", err);
+          logger.warn("NAV", "allTabs query failed:", err);
         }
       }
 
-      console.log(`[FeedRule][NAV] existing tabs found:`, matchingTabs ? matchingTabs.length : 0);
+      logger.debug("NAV", `existing tabs found:`, matchingTabs ? matchingTabs.length : 0);
 
       if (matchingTabs && matchingTabs.length > 0) {
         const existingTab = matchingTabs[0];
 
         // Current-Tab Optimization: If this page is already active, avoid redundant tabs.update()
         if (existingTab.active) {
-          console.log(`[FeedRule][NAV] tab ${existingTab.id} is already active, focusing window`);
+          logger.debug("NAV", `tab ${existingTab.id} is already active, focusing window`);
           if (existingTab.windowId && chrome.windows?.update) {
             try {
               await chrome.windows.update(existingTab.windowId, { focused: true });
@@ -217,7 +214,7 @@ export async function openExtensionPage(pageKeyOrPath) {
         }
 
         try {
-          console.log(`[FeedRule][NAV] reusing tab ${existingTab.id}`);
+          logger.debug("NAV", `reusing tab ${existingTab.id}`);
           await chrome.tabs.update(existingTab.id, { active: true });
           if (existingTab.windowId && chrome.windows?.update) {
             try {
@@ -228,12 +225,12 @@ export async function openExtensionPage(pageKeyOrPath) {
           }
           return existingTab;
         } catch (updateErr) {
-          console.warn("[FeedRule][NAV] Stale tab ID on update, falling back to create:", updateErr);
+          logger.warn("NAV", "Stale tab ID on update, falling back to create:", updateErr);
         }
       }
 
       // No existing tab -> create exactly one new tab
-      console.log(`[FeedRule][NAV] creating tab: ${canonicalUrl}`);
+      logger.debug("NAV", `creating tab: ${canonicalUrl}`);
       return await chrome.tabs.create({ url: canonicalUrl });
     } finally {
       inFlightNavigations.delete(canonicalPathname);
