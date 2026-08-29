@@ -17,6 +17,7 @@ import {
   computeEffectivePhysics,
   getNodeCollisionRadius,
 } from "../src/graph/force-layout.js";
+import { GraphRenderer, shouldRenderNodeLabel } from "../src/graph/graph-renderer.js";
 import { sanitizeSavedPost } from "../src/storage/saved-posts-store.js";
 
 test("buildKnowledgeGraph - handles empty dataset", () => {
@@ -415,6 +416,7 @@ test("DOM Contract: All element IDs required by graph.js exist in graph.html", (
     "focusLabel",
     "exitFocusBtn",
     "emptyState",
+    "emptyStateTitle",
     "emptyStateDesc",
     "sidebar",
     "toggleSidebarBtn",
@@ -946,4 +948,142 @@ test("Combined Filters & Search - Logical composition across groups with search 
   assert.equal(nodeTypeGraph.nodes.length, 3); // 1 post + 2 topics
   assert.equal(nodeTypeGraph.edges.length, 2); // 2 has-topic edges
   assert.ok(nodeTypeGraph.nodes.every((n) => n.type !== "author"));
+});
+
+// =========================================================================
+// KNOWLEDGE GRAPH UX & INTERACTION POLISH REGRESSION TESTS
+// =========================================================================
+
+test("shouldRenderNodeLabel - deterministic label priority policy across scales and interaction states", () => {
+  const postNode = { id: "post:1", type: "post", label: "Alice: Machine learning systems" };
+  const topicHub = { id: "topic:ai", type: "topic", label: "AI", count: 8 };
+  const standardTopic = { id: "topic:linux", type: "topic", label: "Linux", count: 1 };
+  const authorNode = { id: "author:alice", type: "author", label: "Alice", count: 3 };
+
+  // 1. Active / Selected Node is ALWAYS visible regardless of scale or zoom
+  assert.equal(
+    shouldRenderNodeLabel(postNode, { activeNode: postNode, zoom: 0.2, totalNodes: 500 }),
+    true,
+    "Selected node must always render label"
+  );
+  assert.equal(
+    shouldRenderNodeLabel(postNode, { activeNode: { id: "other" }, zoom: 0.2, totalNodes: 500 }),
+    false,
+    "Unselected post in dense graph at low zoom should hide label"
+  );
+
+  // 2. Directly connected neighbors are ALWAYS visible
+  const connectedIds = new Set(["post:1", "topic:ai"]);
+  assert.equal(
+    shouldRenderNodeLabel(postNode, { activeNode: { id: "topic:ai" }, connectedIds, zoom: 0.3, totalNodes: 400 }),
+    true,
+    "Connected neighbor must render label"
+  );
+
+  // 3. High-degree Topic Hub is visible across normal zoom levels
+  assert.equal(
+    shouldRenderNodeLabel(topicHub, { zoom: 0.8, totalNodes: 100 }),
+    true,
+    "Major topic hub must be visible in normal graph views"
+  );
+
+  // 4. In large graph (N = 300), standard peripheral topics require closer zoom
+  assert.equal(
+    shouldRenderNodeLabel(standardTopic, { zoom: 0.5, totalNodes: 300 }),
+    false,
+    "Low-degree topic in large graph should hide at low zoom to prevent clutter"
+  );
+  assert.equal(
+    shouldRenderNodeLabel(standardTopic, { zoom: 1.0, totalNodes: 300 }),
+    true,
+    "Low-degree topic renders when zoomed in"
+  );
+
+  // 5. Post leaf nodes reveal progressively when zoomed in
+  assert.equal(
+    shouldRenderNodeLabel(postNode, { zoom: 0.8, totalNodes: 80 }),
+    false
+  );
+  assert.equal(
+    shouldRenderNodeLabel(postNode, { zoom: 1.5, totalNodes: 80 }),
+    true,
+    "Post node renders when zoomed in past threshold"
+  );
+});
+
+test("fitGraph - centers and frames visible graph cleanly without NaN, Infinity, or over-magnification", () => {
+  const mockCanvas = {
+    getContext: () => ({}),
+    getBoundingClientRect: () => ({ width: 1000, height: 800, left: 0, top: 0 }),
+    style: {},
+  };
+
+  // 1. Single node graph
+  const singleNode = { id: "node:1", type: "post", x: 400, y: 300 };
+  const layoutSingle = {
+    nodes: [singleNode],
+    edges: [],
+    reheat: () => {},
+    tick: () => true,
+  };
+  const rendererSingle = new GraphRenderer(mockCanvas, layoutSingle);
+  rendererSingle.fitGraph(60);
+
+  assert.ok(!isNaN(rendererSingle.zoom), "Zoom must not be NaN");
+  assert.ok(isFinite(rendererSingle.zoom), "Zoom must be finite");
+  assert.ok(rendererSingle.zoom <= 1.2, "Single node should not over-magnify");
+  assert.ok(!isNaN(rendererSingle.panX) && isFinite(rendererSingle.panX));
+  assert.ok(!isNaN(rendererSingle.panY) && isFinite(rendererSingle.panY));
+
+  // 2. Large graph (100 nodes spread across canvas)
+  const largeNodes = Array.from({ length: 100 }, (_, i) => ({
+    id: `node:${i}`,
+    type: i % 2 === 0 ? "post" : "topic",
+    x: (i * 47) % 1200 - 200,
+    y: (i * 61) % 1000 - 150,
+  }));
+  const layoutLarge = {
+    nodes: largeNodes,
+    edges: [],
+    reheat: () => {},
+    tick: () => true,
+  };
+  const rendererLarge = new GraphRenderer(mockCanvas, layoutLarge);
+  rendererLarge.fitGraph(60);
+
+  assert.ok(!isNaN(rendererLarge.zoom) && isFinite(rendererLarge.zoom));
+  assert.ok(rendererLarge.zoom >= 0.15 && rendererLarge.zoom <= 2.0, "Fit zoom must stay within bounds");
+  assert.ok(!isNaN(rendererLarge.panX) && isFinite(rendererLarge.panX));
+  assert.ok(!isNaN(rendererLarge.panY) && isFinite(rendererLarge.panY));
+});
+
+test("GraphRenderer - getConnectedNodeIds extracts exact neighborhood for active node", () => {
+  const mockCanvas = {
+    getContext: () => ({}),
+    getBoundingClientRect: () => ({ width: 800, height: 600, left: 0, top: 0 }),
+    style: {},
+  };
+
+  const layout = {
+    nodes: [{ id: "A" }, { id: "B" }, { id: "C" }, { id: "D" }],
+    edges: [
+      { source: "A", target: "B" },
+      { source: "A", target: "C" },
+      { source: "C", target: "D" },
+    ],
+    reheat: () => {},
+    tick: () => true,
+  };
+
+  const renderer = new GraphRenderer(mockCanvas, layout);
+
+  // Active node = A (connected to B and C, but not D)
+  const connectedToA = renderer.getConnectedNodeIds({ id: "A" });
+  assert.ok(connectedToA.has("A"));
+  assert.ok(connectedToA.has("B"));
+  assert.ok(connectedToA.has("C"));
+  assert.equal(connectedToA.has("D"), false);
+
+  // Null active node returns null
+  assert.equal(renderer.getConnectedNodeIds(null), null);
 });

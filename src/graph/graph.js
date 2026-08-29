@@ -53,6 +53,7 @@ const focusBanner = document.getElementById("focusBanner");
 const focusLabel = document.getElementById("focusLabel");
 const exitFocusBtn = document.getElementById("exitFocusBtn");
 const emptyState = document.getElementById("emptyState");
+const emptyStateTitle = document.getElementById("emptyStateTitle");
 const emptyStateDesc = document.getElementById("emptyStateDesc");
 
 // Sidebar & Detail Card
@@ -458,14 +459,16 @@ function updateGraph() {
 
   if (activeGraph.nodes.length === 0) {
     emptyState.style.display = "flex";
-    emptyStateDesc.textContent =
-      focusedNodeId ||
-      selectedTopics.size > 0 ||
-      selectedAuthors.size > 0 ||
-      searchQuery ||
-      (selectedNodeTypes.size > 0 && selectedNodeTypes.size < 3)
-        ? "No graph nodes match your active filters or focused neighborhood."
-        : "Posts saved in your Second Brain will automatically form your Knowledge Graph.";
+    if (allSavedPosts.length === 0) {
+      if (emptyStateTitle) emptyStateTitle.textContent = "No Saved Posts Found";
+      emptyStateDesc.textContent = "Posts saved in your Second Brain will automatically form your Knowledge Graph.";
+    } else if (focusedNodeId) {
+      if (emptyStateTitle) emptyStateTitle.textContent = "Empty Focused Neighborhood";
+      emptyStateDesc.textContent = "The focused node has no remaining connections under your active filter criteria.";
+    } else {
+      if (emptyStateTitle) emptyStateTitle.textContent = "No Matching Nodes";
+      emptyStateDesc.textContent = "No graph nodes match your active topic, author, node type, or search filters. Try clearing some filters.";
+    }
   } else {
     emptyState.style.display = "none";
   }

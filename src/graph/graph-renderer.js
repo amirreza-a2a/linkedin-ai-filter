@@ -3,16 +3,72 @@
 
 import { prepareEdgeRouting, computeEdgeGeometry } from "./edge-router.js";
 
-const NODE_COLORS = {
+export const NODE_COLORS = {
   post: { fill: "#0a66c2", stroke: "#004182", text: "#191919" },
   topic: { fill: "#10b981", stroke: "#047857", text: "#065f46" },
   author: { fill: "#f59e0b", stroke: "#b45309", text: "#92400e" },
 };
 
-const EDGE_COLORS = {
+export const EDGE_COLORS = {
   "has-topic": "#a7f3d0",
   "written-by": "#fde68a",
 };
+
+/**
+ * Deterministic label priority policy for Knowledge Graph Canvas nodes.
+ *
+ * Priority Tiers:
+ * 1. Active (selected or hovered) node and directly connected neighbors are ALWAYS visible.
+ * 2. Major Topic (count >= 3) and Author (count >= 2) hubs are visible across medium/large views.
+ * 3. Standard Topics and Authors adaptively display based on node density and zoom.
+ * 4. Post nodes (leaf constellation) display when connected or when zoomed in.
+ *
+ * @param {Object} node - Graph node { id, type, label, count }
+ * @param {Object} [context={}]
+ * @param {Object|null} [context.activeNode] - Hovered or selected node
+ * @param {Set<string>|null} [context.connectedIds] - IDs of nodes connected to activeNode
+ * @param {number} [context.zoom=1.0] - Current canvas zoom level
+ * @param {number} [context.totalNodes=10] - Total active node count
+ * @returns {boolean} Whether the node's label should be rendered
+ */
+export function shouldRenderNodeLabel(node, context = {}) {
+  if (!node) return false;
+
+  const activeNode = context.activeNode || null;
+  const connectedIds = context.connectedIds || null;
+  const zoom = typeof context.zoom === "number" ? context.zoom : 1.0;
+  const totalNodes = typeof context.totalNodes === "number" ? context.totalNodes : 10;
+
+  // 1. Priority Tier 1: Active node and immediate neighbors are ALWAYS 100% visible
+  if (activeNode && activeNode.id === node.id) return true;
+  if (connectedIds && connectedIds.has(node.id)) return true;
+
+  // 2. Priority Tier 2: High-Degree Hubs
+  const isHighDegreeHub =
+    (node.type === "topic" && (node.count || 0) >= 3) ||
+    (node.type === "author" && (node.count || 0) >= 2);
+
+  if (isHighDegreeHub) {
+    if (totalNodes <= 150) return true;
+    return zoom >= 0.55;
+  }
+
+  // 3. Priority Tier 3: Standard Topics and Authors
+  if (node.type === "topic" || node.type === "author") {
+    if (totalNodes <= 60) return true;
+    if (totalNodes <= 180) return zoom >= 0.75;
+    return zoom >= 0.95;
+  }
+
+  // 4. Priority Tier 4: Post nodes (dense leaf constellation)
+  if (node.type === "post") {
+    if (totalNodes <= 25) return zoom >= 1.05;
+    if (totalNodes <= 100) return zoom >= 1.35;
+    return zoom >= 1.7;
+  }
+
+  return false;
+}
 
 export class GraphRenderer {
   constructor(canvas, layout, options = {}) {
@@ -127,25 +183,28 @@ export class GraphRenderer {
 
     for (const n of nodes) {
       const r = this.getNodeRadius(n);
-      minX = Math.min(minX, n.x - r);
-      maxX = Math.max(maxX, n.x + r);
-      minY = Math.min(minY, n.y - r);
-      maxY = Math.max(maxY, n.y + r);
+      const nx = typeof n.x === "number" && !isNaN(n.x) ? n.x : 0;
+      const ny = typeof n.y === "number" && !isNaN(n.y) ? n.y : 0;
+      minX = Math.min(minX, nx - r);
+      maxX = Math.max(maxX, nx + r);
+      minY = Math.min(minY, ny - r);
+      maxY = Math.max(maxY, ny + r);
     }
 
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.canvas?.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { width: 800, height: 600 };
     const w = rect.width || 800;
     const h = rect.height || 600;
 
-    const graphW = Math.max(maxX - minX, 80);
-    const graphH = Math.max(maxY - minY, 80);
+    const graphW = Math.max(maxX - minX, 100);
+    const graphH = Math.max(maxY - minY, 100);
     const graphCx = (minX + maxX) / 2;
     const graphCy = (minY + maxY) / 2;
 
     const availW = Math.max(w - padding * 2, 100);
     const availH = Math.max(h - padding * 2, 100);
 
-    const fitZoom = Math.max(0.2, Math.min(availW / graphW, availH / graphH, 2.0));
+    // Bounded fit zoom: 0.15 to 1.8 (capping small graphs at 1.15 to prevent over-magnification)
+    const fitZoom = Math.max(0.15, Math.min(availW / graphW, availH / graphH, nodes.length <= 3 ? 1.15 : 1.8));
 
     this.zoom = fitZoom;
     this.panX = (w / 2 - graphCx) * fitZoom;
@@ -257,15 +316,16 @@ export class GraphRenderer {
 
     c.addEventListener("wheel", (e) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newZoom = Math.max(0.2, Math.min(this.zoom * zoomFactor, 4.0));
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+      const newZoom = Math.max(0.15, Math.min(this.zoom * zoomFactor, 5.0));
 
       const rect = c.getBoundingClientRect();
       const mouseX = e.clientX - rect.left - rect.width / 2;
       const mouseY = e.clientY - rect.top - rect.height / 2;
 
-      this.panX -= (mouseX - this.panX) * (newZoom / this.zoom - 1);
-      this.panY -= (mouseY - this.panY) * (newZoom / this.zoom - 1);
+      // Mathematically exact cursor-anchored zoom transform
+      this.panX = mouseX - (mouseX - this.panX) * (newZoom / this.zoom);
+      this.panY = mouseY - (mouseY - this.panY) * (newZoom / this.zoom);
       this.zoom = newZoom;
 
       this.requestRender();
@@ -286,9 +346,11 @@ export class GraphRenderer {
 
   draw() {
     const ctx = this.ctx;
-    const rect = this.canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    if (!ctx || typeof ctx.save !== "function") return;
+
+    const rect = this.canvas?.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { width: 800, height: 600 };
+    const w = rect.width || 800;
+    const h = rect.height || 600;
 
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
@@ -302,7 +364,9 @@ export class GraphRenderer {
     ctx.translate(-cx, -cy);
 
     const activeNode = this.hoveredNode || this.selectedNode;
+    const isHoveredOnly = this.hoveredNode && !this.selectedNode;
     const connectedIds = this.getConnectedNodeIds(activeNode);
+    const totalNodes = this.layout.nodes.length;
 
     // Ensure edge routing metadata is indexed for current layout edge set
     if (this.layout.edges && this.layout.edges._routedCount !== this.layout.edges.length) {
@@ -318,8 +382,8 @@ export class GraphRenderer {
 
       const isConnected = !connectedIds || (connectedIds.has(u.id) && connectedIds.has(v.id));
       ctx.strokeStyle = EDGE_COLORS[edge.type] || "#cbd5e1";
-      ctx.lineWidth = isConnected && activeNode ? 2.0 : 1.2;
-      ctx.globalAlpha = !activeNode ? 0.7 : isConnected ? 1.0 : 0.12;
+      ctx.lineWidth = isConnected && activeNode ? 2.2 : 1.2;
+      ctx.globalAlpha = !activeNode ? 0.7 : isConnected ? 1.0 : 0.08;
 
       const geom = computeEdgeGeometry(edge);
 
@@ -340,18 +404,25 @@ export class GraphRenderer {
     // 2. Draw Nodes
     for (const node of this.layout.nodes) {
       const isConnected = !connectedIds || connectedIds.has(node.id);
-      const isTarget = activeNode && activeNode.id === node.id;
+      const isSelected = this.selectedNode && this.selectedNode.id === node.id;
+      const isHovered = this.hoveredNode && this.hoveredNode.id === node.id;
       const r = this.getNodeRadius(node);
       const colors = NODE_COLORS[node.type] || NODE_COLORS.post;
 
-      ctx.globalAlpha = !activeNode ? 1.0 : isConnected ? 1.0 : 0.15;
+      ctx.globalAlpha = !activeNode ? 1.0 : isConnected ? 1.0 : 0.18;
 
-      // Outer selection / highlight ring
-      if (isTarget) {
+      // Outer Selection Ring / Hover Aura
+      if (isSelected) {
         ctx.beginPath();
-        ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2);
+        ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2);
         ctx.strokeStyle = colors.fill;
         ctx.lineWidth = 2.5;
+        ctx.stroke();
+      } else if (isHovered) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r + 3.5, 0, Math.PI * 2);
+        ctx.strokeStyle = colors.stroke;
+        ctx.lineWidth = 1.8;
         ctx.stroke();
       }
 
@@ -361,22 +432,29 @@ export class GraphRenderer {
       ctx.fillStyle = colors.fill;
       ctx.fill();
       ctx.strokeStyle = colors.stroke;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = isSelected || isHovered ? 2.0 : 1.5;
       ctx.stroke();
 
-      // Node Labels (render for Topic and Author, or for hovered/selected nodes)
-      const shouldDrawLabel = node.type !== "post" || isConnected || this.zoom >= 1.4;
+      // Node Labels (rendered adaptively according to deterministic priority model)
+      const shouldDrawLabel = shouldRenderNodeLabel(node, {
+        activeNode,
+        connectedIds,
+        zoom: this.zoom,
+        totalNodes,
+      });
+
       if (shouldDrawLabel) {
         ctx.font = node.type === "topic" ? "bold 11px sans-serif" : "10.5px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
 
-        const text = node.label.length > 22 ? `${node.label.slice(0, 22)}…` : node.label;
-        const textY = node.y + r + 3;
+        const maxLen = node.type === "topic" ? 26 : 22;
+        const text = node.label.length > maxLen ? `${node.label.slice(0, maxLen)}…` : node.label;
+        const textY = node.y + r + 3.5;
 
-        // Label background outline for legibility
+        // Label background outline for crisp legibility over intersecting edges
         ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 3.5;
         ctx.strokeText(text, node.x, textY);
 
         ctx.fillStyle = colors.text;
