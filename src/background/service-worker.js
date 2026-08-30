@@ -1,4 +1,6 @@
 // src/background/service-worker.js
+// Shared background controller for Chrome MV3 (service worker) and Firefox MV3 (background event page).
+
 import { executeClassifyRequest } from "../llm/request-gateway.js";
 import {
   getSettings,
@@ -17,96 +19,108 @@ import {
   getSavedPosts,
   isPostSaved,
 } from "../storage/saved-posts-store.js";
+import { openExtensionPage } from "../navigation/navigation.js";
 import { logger } from "../utils/logger.js";
+import { browserApi } from "../utils/browser.js";
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || typeof message.type !== "string") return false;
+if (browserApi?.runtime?.onMessage) {
+  browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || typeof message.type !== "string") return false;
 
-  switch (message.type) {
-    case "CLASSIFY_POSTS": {
-      const posts = Array.isArray(message.posts) ? message.posts : [];
-      handleClassify(posts)
-        .then((data) => {
-          try {
-            const results = Array.isArray(data) ? data : (data.results || []);
-            const provider = data.provider || "";
-            const model = data.model || "";
-            const isCustomEndpoint = Boolean(data.isCustomEndpoint);
-            sendResponse({ ok: true, results, provider, model, isCustomEndpoint });
-          } catch (err) {
-            logger.warn("SW", "sendResponse failed:", err);
-          }
+    switch (message.type) {
+      case "CLASSIFY_POSTS": {
+        const posts = Array.isArray(message.posts) ? message.posts : [];
+        handleClassify(posts)
+          .then((data) => {
+            try {
+              const results = Array.isArray(data) ? data : (data.results || []);
+              const provider = data.provider || "";
+              const model = data.model || "";
+              const isCustomEndpoint = Boolean(data.isCustomEndpoint);
+              sendResponse({ ok: true, results, provider, model, isCustomEndpoint });
+            } catch (err) {
+              logger.warn("SW", "sendResponse failed:", err);
+            }
+          })
+          .catch((err) => {
+            logger.error("SW", "classify failed:", err);
+            try {
+              sendResponse({
+                ok: false,
+                error: String(err),
+                provider: "",
+                model: "",
+                isCustomEndpoint: false,
+                results: posts.map((p) => ({
+                  id: p.id,
+                  hide: false,
+                  reason: "error-fail-open",
+                  topics: [],
+                  saved: false,
+                  saveReason: "",
+                  autoSaved: false,
+                })),
+              });
+            } catch (sendErr) {
+              logger.warn("SW", "sendResponse catch failed:", sendErr);
+            }
+          });
+        return true; // keep channel open
+      }
+
+      case "SAVE_POST": {
+        if (!message.post || !message.post.id) {
+          sendResponse({ ok: false, error: "Missing post payload or post.id" });
+          return false;
+        }
+        savePost({
+          ...message.post,
+          autoSaved: message.post.autoSaved === true,
+          saveReason: message.post.saveReason || "Manual save",
         })
-        .catch((err) => {
-          logger.error("SW", "classify failed:", err);
-          try {
-            sendResponse({
-              ok: false,
-              error: String(err),
-              provider: "",
-              model: "",
-              isCustomEndpoint: false,
-              results: posts.map((p) => ({
-                id: p.id,
-                hide: false,
-                reason: "error-fail-open",
-                topics: [],
-                saved: false,
-                saveReason: "",
-                autoSaved: false,
-              })),
-            });
-          } catch (sendErr) {
-            logger.warn("SW", "sendResponse catch failed:", sendErr);
-          }
-        });
-      return true; // keep channel open
-    }
-
-    case "SAVE_POST": {
-      if (!message.post || !message.post.id) {
-        sendResponse({ ok: false, error: "Missing post payload or post.id" });
-        return false;
+          .then((savedPost) => sendResponse({ ok: true, post: savedPost }))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
+        return true;
       }
-      savePost({
-        ...message.post,
-        autoSaved: message.post.autoSaved === true,
-        saveReason: message.post.saveReason || "Manual save",
-      })
-        .then((savedPost) => sendResponse({ ok: true, post: savedPost }))
-        .catch((err) => sendResponse({ ok: false, error: String(err) }));
-      return true;
-    }
 
-    case "UNSAVE_POST": {
-      if (!message.id) {
-        sendResponse({ ok: false, error: "Missing post id" });
-        return false;
+      case "UNSAVE_POST": {
+        if (!message.id) {
+          sendResponse({ ok: false, error: "Missing post id" });
+          return false;
+        }
+        unsavePost(message.id)
+          .then((removed) => sendResponse({ ok: true, removed }))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
+        return true;
       }
-      unsavePost(message.id)
-        .then((removed) => sendResponse({ ok: true, removed }))
-        .catch((err) => sendResponse({ ok: false, error: String(err) }));
-      return true;
-    }
 
-    case "GET_SAVED_POSTS": {
-      getSavedPosts(message.filter || {})
-        .then((posts) => sendResponse({ ok: true, posts }))
-        .catch((err) => sendResponse({ ok: false, error: String(err) }));
-      return true;
-    }
+      case "GET_SAVED_POSTS": {
+        getSavedPosts(message.filter || {})
+          .then((posts) => sendResponse({ ok: true, posts }))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
+        return true;
+      }
 
-    case "IS_POST_SAVED": {
-      isPostSaved(message.id)
-        .then((saved) => sendResponse({ ok: true, saved }))
-        .catch((err) => sendResponse({ ok: false, error: String(err) }));
-      return true;
-    }
+      case "IS_POST_SAVED": {
+        isPostSaved(message.id)
+          .then((saved) => sendResponse({ ok: true, saved }))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
+        return true;
+      }
 
-    default:
-      return false;
-  }
-});
+      case "OPEN_PAGE":
+      case "OPEN_EXTENSION_PAGE": {
+        openExtensionPage(message.page || message.pageKey || "dashboard")
+          .then((tab) => sendResponse({ ok: true, tab }))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  });
+}
 
 async function logResults(posts, results, provider, model, rulesText) {
   const byId = new Map(posts.map((p) => [String(p.id), p]));

@@ -2,6 +2,8 @@
 // Local persistence for the Second Brain (saved LinkedIn posts).
 // Serializes storage mutations to guarantee race-free concurrent updates.
 
+import { browserApi } from "../utils/browser.js";
+
 const SAVED_POSTS_KEY = "savedPosts";
 const MAX_TEXT_LENGTH = 4000;
 
@@ -119,7 +121,10 @@ export async function savePostsBatch(postsArray) {
   }
 
   return withSerializedMutation(async () => {
-    const { [SAVED_POSTS_KEY]: store = {} } = await chrome.storage.local.get([SAVED_POSTS_KEY]);
+    const localStore = browserApi?.storage?.local;
+    if (!localStore) return [];
+
+    const { [SAVED_POSTS_KEY]: store = {} } = await localStore.get([SAVED_POSTS_KEY]);
     let hasChanges = false;
     const savedResults = [];
 
@@ -174,7 +179,7 @@ export async function savePostsBatch(postsArray) {
     }
 
     if (hasChanges) {
-      await chrome.storage.local.set({ [SAVED_POSTS_KEY]: store });
+      await localStore.set({ [SAVED_POSTS_KEY]: store });
     }
 
     return savedResults;
@@ -190,10 +195,13 @@ export async function savePostsBatch(postsArray) {
 export async function unsavePost(postId) {
   if (!postId) return false;
   return withSerializedMutation(async () => {
-    const { [SAVED_POSTS_KEY]: store = {} } = await chrome.storage.local.get([SAVED_POSTS_KEY]);
+    const localStore = browserApi?.storage?.local;
+    if (!localStore) return false;
+
+    const { [SAVED_POSTS_KEY]: store = {} } = await localStore.get([SAVED_POSTS_KEY]);
     if (store[postId]) {
       delete store[postId];
-      await chrome.storage.local.set({ [SAVED_POSTS_KEY]: store });
+      await localStore.set({ [SAVED_POSTS_KEY]: store });
       return true;
     }
     return false;
@@ -210,7 +218,10 @@ export async function unsavePost(postId) {
  * @returns {Promise<Object[]>}
  */
 export async function getSavedPosts(filter = {}) {
-  const { [SAVED_POSTS_KEY]: store = {} } = await chrome.storage.local.get([SAVED_POSTS_KEY]);
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return [];
+
+  const { [SAVED_POSTS_KEY]: store = {} } = await localStore.get([SAVED_POSTS_KEY]);
 
   const allPosts = Object.values(store)
     .map(sanitizeSavedPost)
@@ -236,12 +247,18 @@ export async function getSavedPosts(filter = {}) {
 
 export async function isPostSaved(postId) {
   if (!postId) return false;
-  const { [SAVED_POSTS_KEY]: store = {} } = await chrome.storage.local.get([SAVED_POSTS_KEY]);
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return false;
+
+  const { [SAVED_POSTS_KEY]: store = {} } = await localStore.get([SAVED_POSTS_KEY]);
   return Boolean(store[postId]);
 }
 
 export async function clearSavedPosts() {
   return withSerializedMutation(async () => {
-    await chrome.storage.local.remove([SAVED_POSTS_KEY]);
+    const localStore = browserApi?.storage?.local;
+    if (localStore) {
+      await localStore.remove([SAVED_POSTS_KEY]);
+    }
   });
 }

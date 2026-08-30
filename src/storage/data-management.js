@@ -2,6 +2,7 @@
 // Centralized storage management & reset routines for FeedRule local data.
 
 import { withSerializedMutation } from "./saved-posts-store.js";
+import { browserApi } from "../utils/browser.js";
 
 /**
  * Clears the Second Brain (savedPosts) from local storage.
@@ -11,8 +12,8 @@ import { withSerializedMutation } from "./saved-posts-store.js";
  */
 export async function clearSavedPostsData() {
   return withSerializedMutation(async () => {
-    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-      await chrome.storage.local.remove("savedPosts");
+    if (browserApi?.storage?.local) {
+      await browserApi.storage.local.remove("savedPosts");
     }
   });
 }
@@ -23,8 +24,8 @@ export async function clearSavedPostsData() {
  * @returns {Promise<void>}
  */
 export async function clearDecisionLogData() {
-  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-    await chrome.storage.local.remove("decisionLog");
+  if (browserApi?.storage?.local) {
+    await browserApi.storage.local.remove("decisionLog");
   }
 }
 
@@ -34,23 +35,23 @@ export async function clearDecisionLogData() {
  * @returns {Promise<void>}
  */
 export async function clearApiLogsData() {
-  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-    await chrome.storage.local.remove("apiLogs");
+  if (browserApi?.storage?.local) {
+    await browserApi.storage.local.remove("apiLogs");
   }
 }
 
 /**
- * Enumerates all keys in chrome.storage.local and removes only keys starting with "cache:".
+ * Enumerates all keys in local storage and removes only keys starting with "cache:".
  * Preserves settings, API keys, saved posts, decision logs, and any other local data.
  *
  * @returns {Promise<number>} Number of removed cache keys
  */
 export async function clearClassificationCache() {
-  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-    const all = await chrome.storage.local.get(null);
+  if (browserApi?.storage?.local) {
+    const all = await browserApi.storage.local.get(null);
     const cacheKeys = Object.keys(all || {}).filter((k) => k.startsWith("cache:"));
     if (cacheKeys.length > 0) {
-      await chrome.storage.local.remove(cacheKeys);
+      await browserApi.storage.local.remove(cacheKeys);
     }
     return cacheKeys.length;
   }
@@ -59,7 +60,7 @@ export async function clearClassificationCache() {
 
 /**
  * Full FeedRule extension-local reset.
- * Clears all local data stored in chrome.storage.local, including:
+ * Clears all local data stored in local storage, including:
  * - API keys
  * - daily usage state
  * - classification cache
@@ -71,8 +72,8 @@ export async function clearClassificationCache() {
  */
 export async function clearAllLocalData() {
   return withSerializedMutation(async () => {
-    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-      await chrome.storage.local.clear();
+    if (browserApi?.storage?.local) {
+      await browserApi.storage.local.clear();
     }
   });
 }

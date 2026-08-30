@@ -1,3 +1,5 @@
+// src/navigation/navigation.js
+import { browserApi, getExtensionUrl } from "../utils/browser.js";
 import { logger } from "../utils/logger.js";
 
 export const PAGE_PATHS = {
@@ -47,6 +49,7 @@ const inFlightNavigations = new Map();
 
 /**
  * Normalizes a page key or path to its canonical relative extension path using a strict allowlist.
+ * Scheme-agnostic: handles chrome-extension://, moz-extension://, relative, and root paths.
  * Returns "" for unknown or invalid inputs to prevent constructing arbitrary/malformed URLs.
  *
  * @param {string} pageKeyOrPath
@@ -57,11 +60,8 @@ export function getCanonicalRelativePath(pageKeyOrPath) {
 
   let clean = pageKeyOrPath.trim().toLowerCase();
 
-  // If full chrome-extension:// URL, extract path after origin
-  const extMatch = clean.match(/^chrome-extension:\/\/[a-z0-9_-]+\/(.*)$/i);
-  if (extMatch && extMatch[1]) {
-    clean = extMatch[1];
-  }
+  // Strip extension scheme and origin (e.g. chrome-extension://<id>/ or moz-extension://<uuid>/)
+  clean = clean.replace(/^[a-z0-9-]+:\/\/[^/]+\//i, "");
 
   // Strip query parameters and hash fragments
   clean = clean.split("?")[0].split("#")[0].trim();
@@ -108,7 +108,7 @@ export function normalizeExtensionPathname(urlOrPath) {
 }
 
 /**
- * Resolves the full canonical chrome-extension:// URL for a given page key or path.
+ * Resolves the full canonical extension URL for a given page key or path across all browsers.
  *
  * @param {string} pageKeyOrPath
  * @returns {string} Full extension URL or "" if invalid
@@ -116,9 +116,7 @@ export function normalizeExtensionPathname(urlOrPath) {
 export function getCanonicalExtensionUrl(pageKeyOrPath) {
   const relPath = getCanonicalRelativePath(pageKeyOrPath);
   if (!relPath) return "";
-  return typeof chrome !== "undefined" && chrome.runtime?.getURL
-    ? chrome.runtime.getURL(relPath)
-    : `chrome-extension://feedrule/${relPath}`;
+  return getExtensionUrl(relPath);
 }
 
 /**
@@ -142,8 +140,8 @@ export async function openExtensionPage(pageKeyOrPath) {
   if (typeof pageKeyOrPath === "string" && /^https?:\/\//i.test(pageKeyOrPath.trim())) {
     const extUrl = pageKeyOrPath.trim();
     logger.debug("NAV", `external URL detected, opening in new tab: ${extUrl}`);
-    if (typeof chrome !== "undefined" && chrome.tabs?.create) {
-      return chrome.tabs.create({ url: extUrl });
+    if (browserApi?.tabs?.create) {
+      return browserApi.tabs.create({ url: extUrl });
     }
     return null;
   }
@@ -169,14 +167,14 @@ export async function openExtensionPage(pageKeyOrPath) {
 
   const navPromise = (async () => {
     try {
-      if (typeof chrome === "undefined" || !chrome.tabs) {
+      if (!browserApi?.tabs) {
         return null;
       }
 
       // Query for existing open tabs matching the exact extension URL
       let matchingTabs = [];
       try {
-        matchingTabs = await chrome.tabs.query({ url: canonicalUrl });
+        matchingTabs = await browserApi.tabs.query({ url: canonicalUrl });
       } catch (err) {
         logger.warn("NAV", "tabs.query by URL pattern failed:", err);
       }
@@ -184,7 +182,7 @@ export async function openExtensionPage(pageKeyOrPath) {
       // Fallback query to match tabs that might have query params, hash fragments, or pendingUrl
       if (!matchingTabs || matchingTabs.length === 0) {
         try {
-          const allTabs = await chrome.tabs.query({});
+          const allTabs = await browserApi.tabs.query({});
           matchingTabs = (allTabs || []).filter((tab) => {
             const rawUrl = tab.url || tab.pendingUrl || "";
             if (!rawUrl) return false;
@@ -203,9 +201,9 @@ export async function openExtensionPage(pageKeyOrPath) {
         // Current-Tab Optimization: If this page is already active, avoid redundant tabs.update()
         if (existingTab.active) {
           logger.debug("NAV", `tab ${existingTab.id} is already active, focusing window`);
-          if (existingTab.windowId && chrome.windows?.update) {
+          if (existingTab.windowId && browserApi.windows?.update) {
             try {
-              await chrome.windows.update(existingTab.windowId, { focused: true });
+              await browserApi.windows.update(existingTab.windowId, { focused: true });
             } catch {
               // ignore window focus error
             }
@@ -215,10 +213,10 @@ export async function openExtensionPage(pageKeyOrPath) {
 
         try {
           logger.debug("NAV", `reusing tab ${existingTab.id}`);
-          await chrome.tabs.update(existingTab.id, { active: true });
-          if (existingTab.windowId && chrome.windows?.update) {
+          await browserApi.tabs.update(existingTab.id, { active: true });
+          if (existingTab.windowId && browserApi.windows?.update) {
             try {
-              await chrome.windows.update(existingTab.windowId, { focused: true });
+              await browserApi.windows.update(existingTab.windowId, { focused: true });
             } catch {
               // ignore window focus error
             }
@@ -231,7 +229,7 @@ export async function openExtensionPage(pageKeyOrPath) {
 
       // No existing tab -> create exactly one new tab
       logger.debug("NAV", `creating tab: ${canonicalUrl}`);
-      return await chrome.tabs.create({ url: canonicalUrl });
+      return await browserApi.tabs.create({ url: canonicalUrl });
     } finally {
       inFlightNavigations.delete(canonicalPathname);
     }

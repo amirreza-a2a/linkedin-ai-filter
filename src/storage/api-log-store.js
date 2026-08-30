@@ -1,9 +1,10 @@
 // src/storage/api-log-store.js
 // Persistent audit logging for logical API requests and correlated attempts.
-// Bounded retention (max 100 logical records) in chrome.storage.local with zero secret leakage.
+// Bounded retention (max 100 logical records) in local storage with zero secret leakage.
 
 import { sanitizeErrorMessage } from "../utils/sanitizer.js";
 import { logger } from "../utils/logger.js";
+import { browserApi } from "../utils/browser.js";
 
 const API_LOGS_KEY = "apiLogs";
 export const MAX_LOGICAL_LOGS = 100;
@@ -92,13 +93,14 @@ export async function appendApiLog(rawRecord) {
 
   return withSerializedLogMutation(async () => {
     try {
-      if (typeof chrome === "undefined" || !chrome?.storage?.local) {
+      const localStore = browserApi?.storage?.local;
+      if (!localStore) {
         return false;
       }
 
       const normRecord = normalizeApiLogRecord(rawRecord);
 
-      const res = await chrome.storage.local.get([API_LOGS_KEY]);
+      const res = await localStore.get([API_LOGS_KEY]);
       let currentLogs = [];
       if (Array.isArray(res?.[API_LOGS_KEY])) {
         currentLogs = res[API_LOGS_KEY];
@@ -114,13 +116,13 @@ export async function appendApiLog(rawRecord) {
       let trimmed = combined.slice(0, MAX_LOGICAL_LOGS);
 
       try {
-        await chrome.storage.local.set({ [API_LOGS_KEY]: trimmed });
+        await localStore.set({ [API_LOGS_KEY]: trimmed });
         return true;
       } catch (quotaErr) {
         // Quota recovery: trim to half capacity and retry once
         logger.warn("API_LOG", "Storage quota warning on write, trimming log capacity:", quotaErr);
         trimmed = trimmed.slice(0, Math.floor(MAX_LOGICAL_LOGS / 2));
-        await chrome.storage.local.set({ [API_LOGS_KEY]: trimmed });
+        await localStore.set({ [API_LOGS_KEY]: trimmed });
         return true;
       }
     } catch (err) {
@@ -142,11 +144,12 @@ export async function appendApiLog(rawRecord) {
  */
 export async function getApiLogs(filter = {}) {
   try {
-    if (typeof chrome === "undefined" || !chrome?.storage?.local) {
+    const localStore = browserApi?.storage?.local;
+    if (!localStore) {
       return [];
     }
 
-    const res = await chrome.storage.local.get([API_LOGS_KEY]);
+    const res = await localStore.get([API_LOGS_KEY]);
     let rawList = [];
     if (Array.isArray(res?.[API_LOGS_KEY])) {
       rawList = res[API_LOGS_KEY];
@@ -206,8 +209,9 @@ export async function getApiLogs(filter = {}) {
 export async function clearApiLogs() {
   return withSerializedLogMutation(async () => {
     try {
-      if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-        await chrome.storage.local.remove([API_LOGS_KEY]);
+      const localStore = browserApi?.storage?.local;
+      if (localStore) {
+        await localStore.remove([API_LOGS_KEY]);
       }
     } catch (err) {
       logger.warn("API_LOG", "Failed to clear API logs:", err);

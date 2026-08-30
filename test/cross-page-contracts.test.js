@@ -131,6 +131,9 @@ test("Contract Audit: Singleton navigation targets exist on disk and map to vali
     assert.ok(fs.existsSync(path.resolve(relPath)), `File for ${key} at ${relPath} must exist on disk`);
 
     const extUrl = getCanonicalExtensionUrl(key);
-    assert.ok(extUrl.startsWith("chrome-extension://"), `Key ${key} must produce valid extension URL`);
+    assert.ok(
+      extUrl.startsWith("chrome-extension://") || extUrl.startsWith("moz-extension://"),
+      `Key ${key} must produce valid extension URL (got ${extUrl})`
+    );
   }
 });

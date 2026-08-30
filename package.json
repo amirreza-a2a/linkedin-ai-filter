@@ -1,11 +1,14 @@
 {
   "name": "linkedin-ai-filter",
   "version": "0.1.0",
-  "description": "Custom AI Filter for LinkedIn Chrome Extension",
+  "description": "Custom AI Filter for LinkedIn (Cross-browser WebExtension)",
   "type": "module",
   "scripts": {
-    "build": "node scripts/bundle-content.js",
-    "test": "node scripts/bundle-content.js && node --test test/*.test.js",
+    "build:content": "node scripts/bundle-content.js",
+    "build:chrome": "node scripts/build.js chrome",
+    "build:firefox": "node scripts/build.js firefox",
+    "build": "node scripts/build.js all",
+    "test": "node scripts/build.js all && node --test test/*.test.js",
     "bench": "node test/benchmark.js"
   }
 }

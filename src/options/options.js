@@ -14,6 +14,7 @@ import {
   clearAllLocalData,
 } from "../storage/data-management.js";
 import { logger } from "../utils/logger.js";
+import { browserApi } from "../utils/browser.js";
 
 const getEl = (id) => (typeof document !== "undefined" ? document.getElementById(id) : null);
 
@@ -679,11 +680,11 @@ if (typeof document !== "undefined") {
 
       if (activeBaseUrl) {
         const requiredPattern = getRequiredOriginPattern(activeBaseUrl);
-        if (requiredPattern && chrome?.permissions?.contains && chrome?.permissions?.request) {
+        if (requiredPattern && browserApi?.permissions?.contains && browserApi?.permissions?.request) {
           try {
-            const hasPerm = await chrome.permissions.contains({ origins: [requiredPattern] });
+            const hasPerm = await browserApi.permissions.contains({ origins: [requiredPattern] });
             if (!hasPerm) {
-              const granted = await chrome.permissions.request({ origins: [requiredPattern] });
+              const granted = await browserApi.permissions.request({ origins: [requiredPattern] });
               if (!granted) {
                 setStatus(`Permission denied for ${requiredPattern}. Settings not saved.`, true);
                 return;

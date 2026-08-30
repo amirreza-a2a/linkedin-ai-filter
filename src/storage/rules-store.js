@@ -1,6 +1,8 @@
 // src/storage/rules-store.js
-// Thin wrapper around chrome.storage. API keys stay in `local` only
-// (never synced to Google's cloud). Rules can sync across devices.
+// Cross-browser storage wrapper for user settings, API keys, and decision caches.
+// API keys stay in `local` storage only. Rules can sync across devices via `sync`.
+
+import { browserApi } from "../utils/browser.js";
 
 const DEFAULTS = {
   enabled: true,
@@ -88,7 +90,10 @@ export function getPrimaryApiKey(apiKeysOrList, provider) {
 }
 
 export async function getSettings() {
-  const synced = (await chrome.storage.sync.get([
+  const syncStore = browserApi?.storage?.sync || browserApi?.storage?.local;
+  const localStore = browserApi?.storage?.local;
+
+  const synced = syncStore ? (await syncStore.get([
     "enabled",
     "rulesText",
     "saveRulesText",
@@ -96,8 +101,9 @@ export async function getSettings() {
     "model",
     "baseUrl",
     "dailyCallCap",
-  ])) || {};
-  const local = (await chrome.storage.local.get(["apiKeys"])) || {};
+  ])) || {} : {};
+
+  const local = localStore ? (await localStore.get(["apiKeys"])) || {} : {};
 
   const syncedModel =
     typeof synced.model === "object" && synced.model !== null && !Array.isArray(synced.model)
@@ -124,11 +130,14 @@ export async function getSettings() {
 
 export async function setSettings(partial) {
   const { apiKeys, ...rest } = partial;
-  if (Object.keys(rest).length) {
-    await chrome.storage.sync.set(rest);
+  const syncStore = browserApi?.storage?.sync || browserApi?.storage?.local;
+  const localStore = browserApi?.storage?.local;
+
+  if (Object.keys(rest).length && syncStore) {
+    await syncStore.set(rest);
   }
-  if (apiKeys) {
-    const current = (await chrome.storage.local.get(["apiKeys"])).apiKeys || {};
+  if (apiKeys && localStore) {
+    const current = (await localStore.get(["apiKeys"])).apiKeys || {};
     const normCurrent = normalizeApiKeys(current);
     const normNew = normalizeApiKeys(apiKeys);
     const merged = { ...normCurrent };
@@ -137,7 +146,7 @@ export async function setSettings(partial) {
         merged[p] = normNew[p];
       }
     }
-    await chrome.storage.local.set({ apiKeys: merged });
+    await localStore.set({ apiKeys: merged });
   }
 }
 
@@ -145,15 +154,18 @@ export async function setSettings(partial) {
 // Avoids re-billing the API when the same post scrolls back into view under identical configuration.
 
 export async function getCachedDecision(hash) {
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return null;
   const key = `cache:${hash}`;
-  const result = await chrome.storage.local.get([key]);
+  const result = await localStore.get([key]);
   return result[key] || null;
 }
 
 export async function getCachedDecisions(hashes) {
-  if (!hashes || hashes.length === 0) return {};
+  const localStore = browserApi?.storage?.local;
+  if (!localStore || !hashes || hashes.length === 0) return {};
   const keys = hashes.map((h) => `cache:${h}`);
-  const result = await chrome.storage.local.get(keys);
+  const result = await localStore.get(keys);
   const out = {};
   for (const h of hashes) {
     out[h] = result[`cache:${h}`] || null;
@@ -162,29 +174,35 @@ export async function getCachedDecisions(hashes) {
 }
 
 export async function setCachedDecision(hash, decision) {
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return;
   const key = `cache:${hash}`;
-  await chrome.storage.local.set({ [key]: { ...decision, ts: Date.now() } });
+  await localStore.set({ [key]: { ...decision, ts: Date.now() } });
 }
 
 export async function setCachedDecisions(map) {
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return;
   const toStore = {};
   const now = Date.now();
   for (const [hash, decision] of Object.entries(map)) {
     toStore[`cache:${hash}`] = { ...decision, ts: now };
   }
   if (Object.keys(toStore).length > 0) {
-    await chrome.storage.local.set(toStore);
+    await localStore.set(toStore);
   }
 }
 
 // --- Daily call counter, resets at local midnight ---
 
 export async function incrementAndCheckDailyCap(cap) {
+  const localStore = browserApi?.storage?.local;
+  if (!localStore) return true;
   const today = new Date().toISOString().slice(0, 10);
-  const { dailyUsage } = await chrome.storage.local.get(["dailyUsage"]);
+  const { dailyUsage } = await localStore.get(["dailyUsage"]);
   const usage = dailyUsage && dailyUsage.date === today ? dailyUsage.count : 0;
   const next = usage + 1;
-  await chrome.storage.local.set({ dailyUsage: { date: today, count: next } });
+  await localStore.set({ dailyUsage: { date: today, count: next } });
   return next <= cap;
 }
 

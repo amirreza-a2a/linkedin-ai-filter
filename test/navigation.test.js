@@ -122,6 +122,7 @@ test("Canonicalization: Query parameters and hash fragments are stripped from id
 test("Canonical URL Generation: Produces exact chrome-extension:// URLs for all pages", () => {
   const { mock } = createMockChrome([]);
   globalThis.chrome = mock;
+  globalThis.browser = undefined;
 
   assert.equal(
     getCanonicalExtensionUrl("graph"),
@@ -142,10 +143,72 @@ test("Canonical URL Generation: Produces exact chrome-extension:// URLs for all 
   assert.equal(getCanonicalExtensionUrl("unknown"), "");
 });
 
+test("Firefox WebExtensions: Normalizes moz-extension:// URLs and reuses open tabs", async () => {
+  const mozGraphTab = {
+    id: 77,
+    url: "moz-extension://b453982e-3367-4a47-8a8b-3fb1c19b02a9/src/graph/graph.html",
+    active: false,
+    windowId: 3,
+  };
+
+  const calls = { query: [], update: [], create: [] };
+  const mockBrowser = {
+    runtime: {
+      getURL(p) {
+        return `moz-extension://b453982e-3367-4a47-8a8b-3fb1c19b02a9/${p.replace(/^\//, "")}`;
+      },
+    },
+    tabs: {
+      async query(q) {
+        calls.query.push(q);
+        if (q.url === mozGraphTab.url) return [mozGraphTab];
+        return [mozGraphTab];
+      },
+      async update(id, props) {
+        calls.update.push({ id, props });
+        return { ...mozGraphTab, ...props };
+      },
+      async create(props) {
+        calls.create.push(props);
+        return { id: 78, ...props };
+      },
+    },
+    windows: {
+      async update() {},
+    },
+  };
+
+  const origBrowser = globalThis.browser;
+  const origChrome = globalThis.chrome;
+
+  try {
+    globalThis.browser = mockBrowser;
+    globalThis.chrome = undefined;
+
+    assert.equal(
+      normalizeExtensionPathname("moz-extension://b453982e-3367-4a47-8a8b-3fb1c19b02a9/src/graph/graph.html"),
+      "src/graph/graph.html"
+    );
+    assert.equal(
+      isInternalExtensionUrl("moz-extension://b453982e-3367-4a47-8a8b-3fb1c19b02a9/src/saved/saved.html"),
+      true
+    );
+
+    const result = await openExtensionPage("graph");
+    assert.equal(result.id, 77);
+    assert.equal(calls.create.length, 0);
+    assert.equal(calls.update.length, 1);
+  } finally {
+    globalThis.browser = origBrowser;
+    globalThis.chrome = origChrome;
+  }
+});
+
 test("External Isolation: isInternalExtensionUrl validates internal vs external URLs", () => {
   assert.equal(isInternalExtensionUrl("dashboard"), true);
   assert.equal(isInternalExtensionUrl("src/graph/graph.html"), true);
   assert.equal(isInternalExtensionUrl("chrome-extension://abc/src/saved/saved.html"), true);
+  assert.equal(isInternalExtensionUrl("moz-extension://xyz/src/saved/saved.html"), true);
 
   // External URLs must return false
   assert.equal(isInternalExtensionUrl("https://www.linkedin.com/feed/"), false);

@@ -10,6 +10,31 @@ import { updateDiagnosticOverlay, isDiagnosticModeEnabled, getAllDiagnosticState
 
 logger.debug("CONTENT", "content script module loaded on", typeof location !== "undefined" ? location.href : "");
 
+try {
+  const runtimeApi =
+    typeof globalThis.browser !== "undefined" && globalThis.browser?.runtime
+      ? globalThis.browser.runtime
+      : typeof globalThis.chrome !== "undefined"
+      ? globalThis.chrome?.runtime
+      : null;
+  if (runtimeApi?.getURL && typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.setAttribute("data-feedrule-extension-url", runtimeApi.getURL(""));
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("__feedrule_test_message", (event) => {
+      const payload = event.detail;
+      if (!payload || !runtimeApi?.sendMessage) return;
+      runtimeApi.sendMessage(payload, (response) => {
+        window.dispatchEvent(
+          new CustomEvent("__feedrule_test_response", {
+            detail: { response, lastError: runtimeApi.lastError?.message },
+          })
+        );
+      });
+    });
+  }
+} catch {}
+
 const HIDDEN_CLASS = "feedrule-hidden";
 
 const COMBINED_CONTAINER_SELECTOR = [
@@ -617,102 +642,117 @@ function sendBatchMessage(batch, callback) {
     performanceStats.inFlightElementMaxSize = elementById.size;
   }
 
-  try {
-    chrome.runtime.sendMessage(
-      {
-        type: "CLASSIFY_POSTS",
-        posts: batch.map((p) => ({
-          id: p.id,
-          text: p.text,
-          author: p.author,
-          authorUrl: p.authorUrl,
-          postUrl: p.postUrl,
-        })),
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          logger.warn(
-            "CONTENT",
-            "background message status:",
-            chrome.runtime.lastError.message
-          );
-          for (const post of batch) {
-            const el = post.el || elementById.get(post.id);
-            if (el) {
-              updateDiagnosticOverlay(el, {
-                stage: "RESPONSE_RECEIVED",
-                terminal: "API_ERROR",
-                error: chrome.runtime.lastError.message,
-                domState: "VISIBLE (FAIL-OPEN)",
-              });
-            }
-            inFlightPostIds.delete(post.id);
-            elementById.delete(post.id);
-          }
-          callback();
-          return;
+  const payload = {
+    type: "CLASSIFY_POSTS",
+    posts: batch.map((p) => ({
+      id: p.id,
+      text: p.text,
+      author: p.author,
+      authorUrl: p.authorUrl,
+      postUrl: p.postUrl,
+    })),
+  };
+
+  let handled = false;
+  const handleResponse = (response, errorMsg) => {
+    if (handled) return;
+    handled = true;
+
+    if (errorMsg) {
+      logger.warn(
+        "CONTENT",
+        "background message status:",
+        errorMsg
+      );
+      for (const post of batch) {
+        const el = post.el || elementById.get(post.id);
+        if (el) {
+          updateDiagnosticOverlay(el, {
+            stage: "RESPONSE_RECEIVED",
+            terminal: "API_ERROR",
+            error: errorMsg,
+            domState: "VISIBLE (FAIL-OPEN)",
+          });
         }
-        logger.debug("CONTENT", "got response from background:", response);
-        const results = response?.results || [];
-        logger.trace("CLASSIFY_RESPONSE", `count=${results.length}`);
-
-        for (const decision of results) {
-          cacheDecision(decision.id, decision);
-          inFlightPostIds.delete(decision.id);
-
-          const el = elementById.get(decision.id);
-          elementById.delete(decision.id); // Immediate release of DOM reference for garbage collection
-
-          if (el) {
-            updateDiagnosticOverlay(el, {
-              stage: "RESPONSE_RECEIVED",
-              terminal: decision.hide ? "API_SUCCESS_HIDE" : "API_SUCCESS_SHOW",
-              hide: decision.hide,
-              reason: decision.reason,
-              provider: response?.provider || "",
-              model: response?.model || "",
-              isCustomEndpoint: response?.isCustomEndpoint === true,
-              error: decision.error || "",
-            });
-
-            // Stale selection protection: verify DOM element has not been recycled for a different post
-            if (nodeToPostId.get(el) !== decision.id) {
-              updateDiagnosticOverlay(el, {
-                stage: "STALE_CHECK",
-                terminal: "STALE_RESPONSE_DISCARDED",
-                reason: `Stale node recycled (node has ${nodeToPostId.get(el)}, response for ${decision.id})`,
-                domState: "DISCARDED (STALE RECYCLE)",
-              });
-            } else {
-              applyDecision(el, decision);
-            }
-          }
-        }
-
-        // Defensive invariant: ensure every item in the batch is released even if response was truncated
-        for (const post of batch) {
-          inFlightPostIds.delete(post.id);
-          elementById.delete(post.id);
-        }
-        callback();
+        inFlightPostIds.delete(post.id);
+        elementById.delete(post.id);
       }
-    );
-  } catch (err) {
-    logger.warn("CONTENT", "extension context disconnected:", err);
-    for (const post of batch) {
-      const el = post.el || elementById.get(post.id);
+      callback();
+      return;
+    }
+
+    logger.debug("CONTENT", "got response from background:", response);
+    const results = response?.results || [];
+    logger.trace("CLASSIFY_RESPONSE", `count=${results.length}`);
+
+    for (const decision of results) {
+      cacheDecision(decision.id, decision);
+      inFlightPostIds.delete(decision.id);
+
+      const el = elementById.get(decision.id);
+      elementById.delete(decision.id); // Immediate release of DOM reference for garbage collection
+
       if (el) {
         updateDiagnosticOverlay(el, {
           stage: "RESPONSE_RECEIVED",
-          terminal: "API_ERROR",
-          error: err.message || "extension context disconnected",
-          domState: "VISIBLE (FAIL-OPEN)",
+          terminal: decision.hide ? "API_SUCCESS_HIDE" : "API_SUCCESS_SHOW",
+          hide: decision.hide,
+          reason: decision.reason,
+          provider: response?.provider || "",
+          model: response?.model || "",
+          isCustomEndpoint: response?.isCustomEndpoint === true,
+          error: decision.error || "",
         });
+
+        // Stale selection protection: verify DOM element has not been recycled for a different post
+        if (nodeToPostId.get(el) !== decision.id) {
+          updateDiagnosticOverlay(el, {
+            stage: "STALE_CHECK",
+            terminal: "STALE_RESPONSE_DISCARDED",
+            reason: `Stale node recycled (node has ${nodeToPostId.get(el)}, response for ${decision.id})`,
+            domState: "DISCARDED (STALE RECYCLE)",
+          });
+        } else {
+          applyDecision(el, decision);
+        }
       }
+    }
+
+    // Defensive invariant: ensure every item in the batch is released even if response was truncated
+    for (const post of batch) {
       inFlightPostIds.delete(post.id);
       elementById.delete(post.id);
     }
     callback();
+  };
+
+  try {
+    const runtimeApi =
+      (typeof globalThis.browser !== "undefined" && globalThis.browser?.runtime)
+        ? globalThis.browser.runtime
+        : (typeof globalThis.chrome !== "undefined" ? globalThis.chrome?.runtime : null);
+
+    if (!runtimeApi || typeof runtimeApi.sendMessage !== "function") {
+      throw new Error("Extension runtime unavailable");
+    }
+
+    const sendPromise = runtimeApi.sendMessage(payload, (cbRes) => {
+      const lastErr = runtimeApi.lastError || (typeof chrome !== "undefined" && chrome?.runtime?.lastError);
+      if (lastErr) {
+        handleResponse(null, lastErr.message || "runtime message error");
+      } else {
+        handleResponse(cbRes, null);
+      }
+    });
+
+    if (sendPromise && typeof sendPromise.then === "function") {
+      sendPromise
+        .then((res) => handleResponse(res, null))
+        .catch((err) => handleResponse(null, err?.message || "runtime promise rejection"));
+    }
+  } catch (err) {
+    logger.warn("CONTENT", "extension context disconnected:", err);
+    handleResponse(null, err?.message || "extension context disconnected");
   }
 }
 

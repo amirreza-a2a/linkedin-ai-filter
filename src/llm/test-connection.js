@@ -6,6 +6,7 @@ import { validateAndNormalizeBaseUrl, resolveProviderEndpoint, getRequiredOrigin
 import { logger } from "../utils/logger.js";
 import { sanitizeErrorMessage } from "../utils/sanitizer.js";
 import { appendApiLog } from "../storage/api-log-store.js";
+import { browserApi } from "../utils/browser.js";
 
 export { sanitizeErrorMessage };
 
@@ -135,13 +136,13 @@ export async function testProviderConnection({
   }
 
   // 3. Request runtime host permission if custom Base URL requires it
-  if (cleanBaseUrl && typeof chrome !== "undefined" && chrome?.permissions?.contains && chrome?.permissions?.request) {
+  if (cleanBaseUrl && browserApi?.permissions?.contains && browserApi?.permissions?.request) {
     const pattern = getRequiredOriginPattern(cleanBaseUrl);
     if (pattern) {
       try {
-        const hasPerm = await chrome.permissions.contains({ origins: [pattern] });
+        const hasPerm = await browserApi.permissions.contains({ origins: [pattern] });
         if (!hasPerm) {
-          const granted = await chrome.permissions.request({ origins: [pattern] });
+          const granted = await browserApi.permissions.request({ origins: [pattern] });
           if (!granted) {
             return {
               ok: false,
