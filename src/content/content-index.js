@@ -38,13 +38,13 @@ const NON_FEED_ANCESTOR_SELECTOR = [
 ].join(", ");
 
 const FEED_ROOT_SELECTORS = [
+  "main#workspace",
   "main.scaffold-layout__main",
   "div[data-testid='mainFeed']",
   ".scaffold-finite-scroll__content",
   ".scaffold-finite-scroll",
-  "main#workspace section div[role='list']",
   "main#workspace section",
-  "main#workspace",
+  "main#workspace section div[role='list']",
   "div.core-rail",
   "main[role='main']",
 ];
@@ -1125,6 +1125,29 @@ let currentFeedObserver = null;
 let currentObservedFeedRoot = null;
 let feedRootPollTimer = null;
 
+let feedScrollScanAttached = false;
+let feedScrollScanTimer = null;
+
+function ensureScrollListener() {
+  if (feedScrollScanAttached || typeof window === "undefined") return;
+  feedScrollScanAttached = true;
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!feedScrollScanTimer) {
+        feedScrollScanTimer = setTimeout(() => {
+          feedScrollScanTimer = null;
+          const root = currentObservedFeedRoot || (typeof document !== "undefined" ? findFeedRoot(document) : null);
+          if (root) {
+            scan(root);
+          }
+        }, 300);
+      }
+    },
+    { capture: true, passive: true }
+  );
+}
+
 export function attachFeedObserver(feedRoot) {
   if (!feedRoot) return false;
   performanceStats.feedRootResolutionAttempts++;
@@ -1159,6 +1182,8 @@ export function attachFeedObserver(feedRoot) {
 
     logger.trace("OBSERVER_ATTACHED", `root=${feedRoot.tagName || "ROOT"}`);
 
+    ensureScrollListener();
+
     // Scan initial posts in this feed root
     logger.trace("INITIAL_SCAN", `root=${feedRoot.tagName || "ROOT"}`);
     scan(feedRoot);
@@ -1166,6 +1191,19 @@ export function attachFeedObserver(feedRoot) {
       clearTimeout(flushTimer);
       flushTimer = setTimeout(flush, 0);
     }
+
+    // Follow-up scans for lazy-hydrated React subtrees
+    setTimeout(() => {
+      if (currentObservedFeedRoot === feedRoot) {
+        scan(feedRoot);
+      }
+    }, 500);
+    setTimeout(() => {
+      if (currentObservedFeedRoot === feedRoot) {
+        scan(feedRoot);
+      }
+    }, 1500);
+
     return true;
   } catch (err) {
     logger.warn("CONTENT", "failed to attach feed observer:", err);
