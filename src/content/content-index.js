@@ -6,7 +6,7 @@
 import { isLikelyPostContainer } from "./post-qualifier.js";
 import { extractAuthor } from "./author-extractor.js";
 import { logger, isDebugEnabled } from "../utils/logger.js";
-import { updateDiagnosticOverlay, isDiagnosticModeEnabled } from "./debug-overlay.js";
+import { updateDiagnosticOverlay, isDiagnosticModeEnabled, getAllDiagnosticStates } from "./debug-overlay.js";
 
 logger.debug("CONTENT", "content script module loaded on", typeof location !== "undefined" ? location.href : "");
 
@@ -415,18 +415,15 @@ export function applyDecision(el, decision) {
   inFlightPostIds.delete(decision.id);
   elementById.delete(decision.id);
 
-  // Diagnostic overlay update
-  updateDiagnosticOverlay(el, {
-    stage: "DOM_APPLIED",
-    terminal: decision.hide ? "DOM_HIDDEN" : "DOM_VISIBLE",
-    hide: decision.hide,
-    reason: decision.reason,
-    domState: decision.hide ? "HIDDEN" : "VISIBLE",
-  });
-
   // Stale selection protection: if el is currently bound to a different post, do not touch this element
   const currentPostOnNode = nodeToPostId.get(el);
   if (currentPostOnNode && currentPostOnNode !== decision.id) {
+    updateDiagnosticOverlay(el, {
+      stage: "STALE_CHECK",
+      terminal: "STALE_RESPONSE_DISCARDED",
+      reason: `Stale node recycled (node has ${currentPostOnNode}, response for ${decision.id})`,
+      domState: "DISCARDED (STALE RECYCLE)",
+    });
     return;
   }
 
@@ -435,6 +432,11 @@ export function applyDecision(el, decision) {
     el.classList?.remove?.(HIDDEN_CLASS);
     el.removeAttribute?.("data-feedrule-hidden");
     if (el.dataset?.feedruleHidden) delete el.dataset.feedruleHidden;
+    updateDiagnosticOverlay(el, {
+      stage: "DOM_APPLIED",
+      hide: false,
+      reason: "User explicitly revealed via 'Show anyway'",
+    });
     return;
   }
 
@@ -447,6 +449,11 @@ export function applyDecision(el, decision) {
       const placeholder = el.querySelector?.(".feedrule-placeholder");
       if (placeholder?.remove) placeholder.remove();
     }
+    updateDiagnosticOverlay(el, {
+      stage: "DOM_APPLIED",
+      hide: false,
+      reason: decision.reason,
+    });
     return;
   }
 
@@ -458,47 +465,60 @@ export function applyDecision(el, decision) {
   // Pause any autoplaying videos inside the hidden post
   pauseVideosInContainer(el);
 
-  if (el.dataset?.feedruleWrapped && el.querySelector?.(".feedrule-placeholder")) return;
+  if (!el.dataset?.feedruleWrapped || !el.querySelector?.(".feedrule-placeholder")) {
+    if (typeof document !== "undefined") {
+      if (el.dataset) el.dataset.feedruleWrapped = "1";
+      let placeholder = el.querySelector?.(".feedrule-placeholder");
+      if (!placeholder) {
+        placeholder = document.createElement("div");
+        placeholder.className = "feedrule-placeholder";
 
-  if (typeof document !== "undefined") {
-    if (el.dataset) el.dataset.feedruleWrapped = "1";
-    let placeholder = el.querySelector?.(".feedrule-placeholder");
-    if (!placeholder) {
-      placeholder = document.createElement("div");
-      placeholder.className = "feedrule-placeholder";
+        const label = document.createElement("span");
+        label.textContent = decision.reason
+          ? `Hidden by your filter: ${decision.reason}`
+          : "Hidden by your FeedRule AI filter";
 
-      const label = document.createElement("span");
-      label.textContent = decision.reason
-        ? `Hidden by your filter: ${decision.reason}`
-        : "Hidden by your filter";
+        const showBtn = document.createElement("button");
+        showBtn.type = "button";
+        showBtn.className = "feedrule-show-btn";
+        showBtn.textContent = "Show anyway";
+        if (typeof showBtn.addEventListener === "function") {
+          showBtn.addEventListener("click", (e) => {
+            if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+            if (e && typeof e.preventDefault === "function") e.preventDefault();
+            markPostUserRevealed(decision.id);
+            if (el.dataset) el.dataset.feedruleUserRevealed = "1";
+            if (placeholder.remove) placeholder.remove();
+            el.classList?.remove?.(HIDDEN_CLASS);
+            el.removeAttribute?.("data-feedrule-hidden");
+            if (el.dataset?.feedruleHidden) delete el.dataset.feedruleHidden;
+            updateDiagnosticOverlay(el, {
+              stage: "DOM_APPLIED",
+              hide: false,
+              reason: "User clicked 'Show anyway'",
+            });
+          });
+        }
 
-      const showBtn = document.createElement("button");
-      showBtn.type = "button";
-      showBtn.className = "feedrule-show-btn";
-      showBtn.textContent = "Show anyway";
-      if (showBtn.addEventListener) {
-        showBtn.addEventListener("click", () => {
-          markPostUserRevealed(decision.id);
-          if (el.dataset) {
-            el.dataset.feedruleUserRevealed = "1";
-            delete el.dataset.feedruleHidden;
-          }
-          el.removeAttribute?.("data-feedrule-hidden");
-          el.classList?.remove?.(HIDDEN_CLASS);
-        });
-      }
-
-      placeholder.appendChild(label);
-      placeholder.appendChild(showBtn);
-      if (el.prepend) {
-        el.prepend(placeholder);
-      } else if (el.insertBefore && el.firstChild) {
-        el.insertBefore(placeholder, el.firstChild);
-      } else if (el.appendChild) {
-        el.appendChild(placeholder);
+        placeholder.appendChild(label);
+        placeholder.appendChild(showBtn);
+        if (el.prepend) {
+          el.prepend(placeholder);
+        } else if (el.insertBefore && el.firstChild) {
+          el.insertBefore(placeholder, el.firstChild);
+        } else if (el.appendChild) {
+          el.appendChild(placeholder);
+        }
       }
     }
   }
+
+  // Final Real DOM Verification
+  updateDiagnosticOverlay(el, {
+    stage: "DOM_APPLIED",
+    hide: true,
+    reason: decision.reason,
+  });
 }
 
 // --- Feed watcher & Request Queue --------------------------------------
@@ -615,11 +635,18 @@ function sendBatchMessage(batch, callback) {
               model: response?.model || "",
               error: decision.error || "",
             });
-          }
 
-          // Stale selection protection: verify DOM element has not been recycled for a different post
-          if (el && nodeToPostId.get(el) === decision.id) {
-            applyDecision(el, decision);
+            // Stale selection protection: verify DOM element has not been recycled for a different post
+            if (nodeToPostId.get(el) !== decision.id) {
+              updateDiagnosticOverlay(el, {
+                stage: "STALE_CHECK",
+                terminal: "STALE_RESPONSE_DISCARDED",
+                reason: `Stale node recycled (node has ${nodeToPostId.get(el)}, response for ${decision.id})`,
+                domState: "DISCARDED (STALE RECYCLE)",
+              });
+            } else {
+              applyDecision(el, decision);
+            }
           }
         }
 
@@ -1188,6 +1215,8 @@ if (typeof window !== "undefined") {
   window.scan = scan;
   window.isDiagnosticModeEnabled = isDiagnosticModeEnabled;
   window.updateDiagnosticOverlay = updateDiagnosticOverlay;
+  window.getAllDiagnosticStates = getAllDiagnosticStates;
+  window.__getFeedRuleDiagnosticStates = getAllDiagnosticStates;
   window.addEventListener("popstate", () => initFeedObserver(document));
 }
 
