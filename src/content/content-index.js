@@ -279,6 +279,7 @@ export function extractPost(el) {
     el.getAttribute?.("data-id") ||
     el.getAttribute?.("data-chameleon-urn") ||
     el.getAttribute?.("data-lazy-mount-id") ||
+    el.closest?.("div[data-lazy-mount-id]")?.getAttribute?.("data-lazy-mount-id") ||
     el.querySelector?.("[data-urn*='activity:']")?.getAttribute?.("data-urn") ||
     el.querySelector?.("[data-urn*='ugcPost:']")?.getAttribute?.("data-urn") ||
     el.querySelector?.("[data-lazy-mount-id]")?.getAttribute?.("data-lazy-mount-id") ||
@@ -342,6 +343,11 @@ export function findContainers(root) {
     root.getAttribute?.("role") !== "listitem"
   ) {
     return [root];
+  }
+
+  const enclosingPost = root.closest?.("div[data-lazy-mount-id], div.feed-shared-update-v2");
+  if (enclosingPost && enclosingPost !== root) {
+    return [enclosingPost];
   }
 
   const rawCandidates = [];
@@ -552,8 +558,15 @@ const nodeToPostId = new WeakMap(); // Element -> postId (tracks current post on
 const inFlightPostIds = new Set(); // postId currently queued in pending or batchQueue
 let pending = [];
 let flushTimer = null;
-const DEBOUNCE_MS = 600;
+const DEBOUNCE_MS = 150;
 const BATCH_SIZE = 8;
+
+export function scheduleFlush(delay = DEBOUNCE_MS) {
+  if (pending.length === 0) return;
+  if (!flushTimer) {
+    flushTimer = setTimeout(flush, delay);
+  }
+}
 
 const batchQueue = [];
 let isProcessingQueue = false;
@@ -905,8 +918,8 @@ export function scan(root) {
     pending.push(post);
   }
 
-  if (pending.length > 0 && !flushTimer) {
-    flushTimer = setTimeout(flush, DEBOUNCE_MS);
+  if (pending.length > 0) {
+    scheduleFlush();
   }
 
   const scanElapsed = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - scanStart;
@@ -946,8 +959,7 @@ export function processMutationQueue() {
   }
 
   if (pending.length > 0) {
-    clearTimeout(flushTimer);
-    flushTimer = setTimeout(flush, DEBOUNCE_MS);
+    scheduleFlush();
   }
 }
 
@@ -1050,7 +1062,7 @@ export function handleMutations(mutations) {
         }
 
         // Check if added node is inside an existing post container
-        const enclosing = node.closest?.(COMBINED_CONTAINER_SELECTOR);
+        const enclosing = node.closest?.("div[data-lazy-mount-id], div.feed-shared-update-v2, div[data-urn*='activity:']") || node.closest?.(COMBINED_CONTAINER_SELECTOR);
         if (enclosing) {
           const currentPostId = nodeToPostId.get(enclosing);
           if (currentPostId && decisionsById.has(currentPostId)) {
@@ -1202,7 +1214,17 @@ export function attachFeedObserver(feedRoot) {
       if (currentObservedFeedRoot === feedRoot) {
         scan(feedRoot);
       }
-    }, 1500);
+    }, 1200);
+    setTimeout(() => {
+      if (currentObservedFeedRoot === feedRoot) {
+        scan(feedRoot);
+      }
+    }, 2500);
+    setTimeout(() => {
+      if (currentObservedFeedRoot === feedRoot) {
+        scan(feedRoot);
+      }
+    }, 4000);
 
     return true;
   } catch (err) {
