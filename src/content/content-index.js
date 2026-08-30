@@ -303,6 +303,28 @@ export function extractPost(el) {
   return { id, text, author, authorUrl, postUrl, el };
 }
 
+export function getMatchedSelector(node) {
+  if (!node || typeof node.matches !== "function") return "unknown";
+  const selectors = [
+    "div[data-lazy-mount-id]",
+    "div.feed-shared-update-v2",
+    "div.occludable-update",
+    "div[data-urn*='activity:']",
+    "div[data-urn*='ugcPost:']",
+    "div[data-urn*='sponsoredUpdate:']",
+    "div[data-id*='activity:']",
+    'div[data-testid="mainFeed"] div[role="listitem"]',
+    'div[role="listitem"]',
+    'div[role="list"] > div',
+  ];
+  for (const s of selectors) {
+    try {
+      if (node.matches(s)) return s;
+    } catch {}
+  }
+  return "custom-candidate";
+}
+
 /**
  * Finds candidate container elements with deduplication favoring canonical inner update nodes.
  * Optimized with fast-path return when root is already a resolved post container.
@@ -370,11 +392,14 @@ export function findContainers(root) {
 
   logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
   if (isDiagnosticModeEnabled()) {
+    const feedRootId = root ? `${root.tagName || "ROOT"}${root.id ? "#" + root.id : ""}${root.className && typeof root.className === "string" ? "." + root.className.split(/\s+/).slice(0, 2).join(".") : ""}` : "UNKNOWN";
     for (const node of filteredNodes) {
       updateDiagnosticOverlay(node, {
         stage: "DISCOVERED",
         terminal: "DISCOVERED",
         postId: node.getAttribute("data-lazy-mount-id") || node.getAttribute("data-urn") || "unknown",
+        matchedSelector: getMatchedSelector(node),
+        feedRootIdentity: feedRootId,
       });
     }
   }
@@ -633,6 +658,7 @@ function sendBatchMessage(batch, callback) {
               reason: decision.reason,
               provider: response?.provider || "",
               model: response?.model || "",
+              isCustomEndpoint: response?.isCustomEndpoint === true,
               error: decision.error || "",
             });
 
@@ -741,6 +767,12 @@ export function scan(root) {
 
     logger.trace("QUALIFICATION", `decision=${qual.decision} score=${qual.score} reason=${qual.reason}`);
 
+    const sigs = qual.signals || {};
+    const signalsSummary = Object.entries(sigs)
+      .filter(([_, v]) => v)
+      .map(([k]) => k)
+      .join(", ") || "none";
+
     updateDiagnosticOverlay(node, {
       stage: "QUALIFIED",
       terminal: qual.qualified
@@ -751,6 +783,8 @@ export function scan(root) {
       qualified: qual.qualified,
       score: qual.score,
       reason: qual.reason,
+      qualificationSignals: `${signalsSummary} (Score: ${qual.score})`,
+      rejectionReason: qual.qualified ? "" : qual.reason,
     });
 
     if (isDebugEnabled()) {

@@ -73,9 +73,9 @@
 
   // --- 3. Diagnostic Overlay Subsystem ---
   // src/content/debug-overlay.js
-  // Robust Document-Level Production Debug Visualization Mode for FeedRule.
-  // Renders per-candidate diagnostic overlays inside a dedicated document-level layer
-  // OUTSIDE the feed post DOM tree, ensuring 100% visibility even when posts are hidden.
+  // Production Debug Visualization Mode for FeedRule.
+  // Robust document-level diagnostic layer with explicit positioning safety,
+  // strict provider attribution, and candidate discovery identity tracing.
   
   function isDiagnosticModeEnabled() {
     try {
@@ -180,16 +180,36 @@
   
       const badge = diagnosticLayer.querySelector(`[data-feedrule-target-id="${state.postId}"]`);
       if (badge) {
-        positionBadge(badge, el);
+        positionBadge(badge, el, state);
       }
     }
   }
   
-  function positionBadge(badge, targetEl) {
-    if (!badge || !targetEl || !targetEl.isConnected) return;
+  function positionBadge(badge, targetEl, state) {
+    if (!badge || !targetEl) return;
+  
+    if (!targetEl.isConnected) {
+      badge.style.display = "none";
+      if (state) {
+        state.positionState = "POSITION_FAILED";
+        state.positionError = "Target element is disconnected from DOM";
+      }
+      return;
+    }
   
     try {
       const rect = targetEl.getBoundingClientRect();
+  
+      // If candidate has zero dimensions or is unmounted, do not place at origin
+      if (rect.width <= 0 || rect.height <= 0 || (rect.top === 0 && rect.left === 0 && rect.width === 0)) {
+        badge.style.display = "none";
+        if (state) {
+          state.positionState = "POSITION_FAILED";
+          state.positionError = "Candidate element has zero width/height";
+        }
+        return;
+      }
+  
       const scrollX = (typeof window !== "undefined" ? (window.scrollX || window.pageXOffset) : 0) || (typeof document !== "undefined" ? document.documentElement.scrollLeft : 0) || 0;
       const scrollY = (typeof window !== "undefined" ? (window.scrollY || window.pageYOffset) : 0) || (typeof document !== "undefined" ? document.documentElement.scrollTop : 0) || 0;
   
@@ -200,8 +220,46 @@
       badge.style.top = `${top + 4}px`;
       badge.style.left = `${left + 6}px`;
       badge.style.width = `${Math.min(width - 12, 620)}px`;
-      badge.style.display = (rect.width > 0 || rect.height > 0 || targetEl.isConnected) ? "block" : "none";
-    } catch {}
+      badge.style.display = "block";
+  
+      if (state) {
+        state.positionState = "POSITION_OK";
+        state.positionError = "";
+      }
+    } catch (err) {
+      badge.style.display = "none";
+      if (state) {
+        state.positionState = "POSITION_FAILED";
+        state.positionError = String(err?.message || err);
+      }
+    }
+  }
+  
+  /**
+   * Formats explicit provider and model information without guessing "Local".
+   */
+  function formatProviderInfo(state = {}) {
+    if (state.provider && typeof state.provider === "string" && state.provider.trim()) {
+      const raw = state.provider.trim();
+      const pLower = raw.toLowerCase();
+      let pName = raw;
+      if (pLower === "gemini") pName = "Gemini";
+      else if (pLower === "openai") pName = "OpenAI";
+      else if (pLower === "claude" || pLower === "anthropic") pName = "Anthropic";
+      else if (pLower === "local") pName = "Local";
+  
+      const modelPart = state.model ? ` (${state.model})` : "";
+      if (state.isCustomEndpoint) {
+        return `${pName}${modelPart} [Local / Custom]`;
+      }
+      return `${pName}${modelPart}`;
+    }
+  
+    if (state.isCustomEndpoint) {
+      return "Local / Custom";
+    }
+  
+    return "Provider: UNKNOWN";
   }
   
   /**
@@ -219,6 +277,19 @@
    *   reason: string,
    *   provider: string,
    *   model: string,
+   *   isCustomEndpoint: boolean,
+   *   matchedSelector: string,
+   *   tagName: string,
+   *   className: string,
+   *   idAttribute: string,
+   *   lazyMountId: string,
+   *   dataUrn: string,
+   *   dataId: string,
+   *   parentTag: string,
+   *   parentClass: string,
+   *   feedRootIdentity: string,
+   *   qualificationSignals: string,
+   *   rejectionReason: string,
    *   attempts: number,
    *   error: string,
    *   hide: boolean,
@@ -234,10 +305,23 @@
   
     candidateElements.add(el);
   
+    // Extract structural DOM identity metadata directly from element
+    const autoMeta = {
+      matchedSelector: data.matchedSelector || "",
+      tagName: el.tagName || "DIV",
+      className: typeof el.className === "string" ? el.className.slice(0, 100) : "",
+      idAttribute: el.id || "",
+      lazyMountId: el.getAttribute?.("data-lazy-mount-id") || "",
+      dataUrn: el.getAttribute?.("data-urn") || "",
+      dataId: el.getAttribute?.("data-id") || "",
+      parentTag: el.parentElement?.tagName || "",
+      parentClass: typeof el.parentElement?.className === "string" ? el.parentElement.className.slice(0, 80) : "",
+    };
+  
     const current = elementDiagnosticStates.get(el) || {
       stage: "DISCOVERED",
       terminal: "DISCOVERED",
-      postId: el.getAttribute("data-lazy-mount-id") || el.getAttribute("data-urn") || "unknown",
+      postId: el.getAttribute?.("data-lazy-mount-id") || el.getAttribute?.("data-urn") || el.getAttribute?.("data-id") || "unknown",
       author: "Unknown",
       textSnippet: "",
       qualified: null,
@@ -245,6 +329,19 @@
       reason: "",
       provider: "",
       model: "",
+      isCustomEndpoint: false,
+      matchedSelector: "",
+      tagName: autoMeta.tagName,
+      className: autoMeta.className,
+      idAttribute: autoMeta.idAttribute,
+      lazyMountId: autoMeta.lazyMountId,
+      dataUrn: autoMeta.dataUrn,
+      dataId: autoMeta.dataId,
+      parentTag: autoMeta.parentTag,
+      parentClass: autoMeta.parentClass,
+      feedRootIdentity: "",
+      qualificationSignals: "",
+      rejectionReason: "",
       attempts: 0,
       error: "",
       hide: null,
@@ -253,9 +350,11 @@
       classHidden: null,
       dataHidden: null,
       computedDisplay: null,
+      positionState: "PENDING",
+      positionError: "",
     };
   
-    const updated = { ...current, ...data };
+    const updated = { ...current, ...autoMeta, ...data };
   
     // Perform Real DOM Verification
     if (data.stage === "DOM_APPLIED" || data.stage === "VERIFY_REAL_DOM_STATE") {
@@ -312,31 +411,99 @@
     renderDocumentLevelBadge(el, updated);
   }
   
-  function getStatusTheme(terminal = "") {
+  function getStatusTheme(terminal = "", qualified = null) {
+    if (qualified === false) {
+      return { 
+        border: "#dc2626", 
+        bg: "#fef2f2", 
+        text: "#7f1d1d", 
+        badge: "#dc2626", 
+        marker: "[FR:REJECTED]", 
+        typeLabel: "REJECTED NON-POST",
+        typeColor: "#991b1b"
+      };
+    }
+  
     switch (terminal) {
       case "DOM_HIDDEN":
       case "API_SUCCESS_HIDE":
-        return { border: "#7c3aed", bg: "#f5f3ff", text: "#4c1d95", badge: "#7c3aed", marker: "[FR:HIDDEN]" };
+        return { 
+          border: "#7c3aed", 
+          bg: "#f5f3ff", 
+          text: "#4c1d95", 
+          badge: "#7c3aed", 
+          marker: "[FR:HIDDEN]", 
+          typeLabel: "QUALIFIED POST",
+          typeColor: "#6d28d9"
+        };
       case "DOM_VISIBLE":
       case "API_SUCCESS_SHOW":
-        return { border: "#16a34a", bg: "#f0fdf4", text: "#14532d", badge: "#16a34a", marker: "[FR:VISIBLE]" };
+        return { 
+          border: "#16a34a", 
+          bg: "#f0fdf4", 
+          text: "#14532d", 
+          badge: "#16a34a", 
+          marker: "[FR:VISIBLE]", 
+          typeLabel: "QUALIFIED POST",
+          typeColor: "#15803d"
+        };
       case "DISPATCHED":
       case "IN_FLIGHT":
-        return { border: "#ea580c", bg: "#fff7ed", text: "#7c2d12", badge: "#ea580c", marker: "[FR:DISPATCHED]" };
+        return { 
+          border: "#ea580c", 
+          bg: "#fff7ed", 
+          text: "#7c2d12", 
+          badge: "#ea580c", 
+          marker: "[FR:DISPATCHED]", 
+          typeLabel: "QUALIFIED POST (DISPATCHED)",
+          typeColor: "#c2410c"
+        };
       case "QUEUED":
-        return { border: "#2563eb", bg: "#eff6ff", text: "#1e3a8a", badge: "#2563eb", marker: "[FR:QUEUED]" };
+        return { 
+          border: "#2563eb", 
+          bg: "#eff6ff", 
+          text: "#1e3a8a", 
+          badge: "#2563eb", 
+          marker: "[FR:QUEUED]", 
+          typeLabel: "QUALIFIED POST (QUEUED)",
+          typeColor: "#1d4ed8"
+        };
       case "STALE_RESPONSE_DISCARDED":
-        return { border: "#d97706", bg: "#fffbeb", text: "#78350f", badge: "#d97706", marker: "[FR:STALE]" };
+        return { 
+          border: "#d97706", 
+          bg: "#fffbeb", 
+          text: "#78350f", 
+          badge: "#d97706", 
+          marker: "[FR:STALE]", 
+          typeLabel: "RECYCLED NODE",
+          typeColor: "#b45309"
+        };
       case "DOM_APPLY_FAILED":
       case "API_TIMEOUT":
       case "API_ERROR":
       case "EXTRACTION_FAILED":
       case "REJECTED_COMPOSER":
       case "REJECTED_NOT_POST":
-        return { border: "#dc2626", bg: "#fef2f2", text: "#7f1d1d", badge: "#dc2626", marker: "[FR:REJECTED]" };
+        return { 
+          border: "#dc2626", 
+          bg: "#fef2f2", 
+          text: "#7f1d1d", 
+          badge: "#dc2626", 
+          marker: "[FR:REJECTED]", 
+          typeLabel: qualified ? "QUALIFIED POST (ERROR)" : "REJECTED NON-POST",
+          typeColor: "#991b1b"
+        };
       case "DISCOVERED":
       default:
-        return { border: "#475569", bg: "#f8fafc", text: "#0f172a", badge: "#475569", marker: "[FR:DISCOVERED]" };
+        return { 
+          border: "#475569", 
+          bg: "#f8fafc", 
+          text: "#0f172a", 
+          badge: "#475569", 
+          marker: "[FR:DISCOVERED]", 
+          typeLabel: "DISCOVERED CANDIDATE",
+          typeColor: "#334155"
+        };
     }
   }
   
@@ -353,7 +520,7 @@
       layer.appendChild(badge);
     }
   
-    const theme = getStatusTheme(state.terminal);
+    const theme = getStatusTheme(state.terminal, state.qualified);
   
     badge.style.cssText = `
       position: absolute;
@@ -370,16 +537,21 @@
       line-height: 1.45;
       box-shadow: 0 4px 10px rgba(0,0,0,0.15);
       user-select: text;
-      display: block !important;
+      display: none;
     `;
   
-    positionBadge(badge, el);
+    // Position badge safely
+    positionBadge(badge, el, state);
+  
+    const candidateHeader = state.qualified === true
+      ? `[POST] ⚙ FEEDRULE DEBUG ${theme.marker}`
+      : (state.qualified === false ? `[NON-POST] ⚙ FEEDRULE DEBUG ${theme.marker}` : `[CANDIDATE] ⚙ FEEDRULE DEBUG ${theme.marker}`);
   
     const qualText = state.qualified === null 
       ? "PENDING" 
       : state.qualified ? `✓ ACCEPT (${state.score ?? 0})` : `✗ REJECT (${state.reason || "unqualified"})`;
   
-    const extractText = state.author !== "Unknown" || state.postId !== "unknown" ? "✓ OK" : "PENDING";
+    const extractText = state.author !== "Unknown" || (state.postId && state.postId !== "unknown") ? "✓ OK" : "PENDING";
   
     const queueText = state.stage === "QUEUED" || state.stage === "DISPATCHED" || state.stage === "RESPONSE_RECEIVED" || state.stage === "DOM_APPLIED" || state.stage === "VERIFY_REAL_DOM_STATE"
       ? "✓ YES"
@@ -399,12 +571,15 @@
   
     const domText = state.domState || "UNTOUCHED";
     const matchedRuleInfo = state.reason || (state.hide ? "Matched active filter rule" : "Neutral / Did not match hide rules");
-    const providerInfo = state.provider ? `${state.provider} (${state.model || "default"})` : "Local / Gateway";
+    const providerInfo = formatProviderInfo(state);
   
     badge.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid ${theme.border}; padding-bottom:6px; margin-bottom:6px;">
-        <span style="font-weight:bold; font-size:12px; letter-spacing:0.5px;">⚙ FEEDRULE DEBUG ${theme.marker}</span>
+        <span style="font-weight:bold; font-size:12px; letter-spacing:0.5px;">${candidateHeader}</span>
         <span style="font-size:10px; font-weight:bold; background:${theme.badge}; color:#ffffff; padding:2px 8px; border-radius:4px;">${escapeHtml(state.terminal)}</span>
+      </div>
+      <div style="font-size:10px; font-weight:bold; color:${theme.typeColor}; margin-bottom:4px; text-transform:uppercase;">
+        STATUS: ${escapeHtml(theme.typeLabel)}
       </div>
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 6px;">
         <div><strong>ID:</strong> ${escapeHtml(state.postId)}</div>
@@ -415,12 +590,19 @@
         <div><strong>Dispatch:</strong> ${dispatchText}</div>
         <div><strong>Response:</strong> ${responseText}</div>
         <div><strong>DOM State:</strong> <strong>${escapeHtml(domText)}</strong></div>
-        <div><strong>Terminal State:</strong> <strong>${escapeHtml(state.terminal)}</strong></div>
-        <div><strong>Provider/Model:</strong> ${escapeHtml(providerInfo)}</div>
+        <div><strong>Terminal:</strong> <strong>${escapeHtml(state.terminal)}</strong></div>
+        <div><strong>Provider:</strong> ${escapeHtml(providerInfo)}</div>
       </div>
-      <div style="background:rgba(0,0,0,0.04); padding:6px; border-radius:4px; font-size:10px; border-left:3px solid ${theme.border};">
+      <div style="background:rgba(0,0,0,0.04); padding:6px; border-radius:4px; font-size:10px; border-left:3px solid ${theme.border}; margin-bottom:4px;">
         <div><strong>Decision:</strong> hide = ${state.hide !== null ? state.hide : "pending"} | <strong>Reason:</strong> ${escapeHtml(matchedRuleInfo)}</div>
         ${state.classHidden !== null ? `<div><strong>DOM Check:</strong> classHidden = ${state.classHidden} | dataHidden = ${state.dataHidden} | display = ${state.computedDisplay || "N/A"}</div>` : ""}
+      </div>
+      <div style="background:rgba(0,0,0,0.02); padding:5px 6px; border-radius:4px; font-size:9.5px; color:#475569; border:1px dashed #cbd5e1;">
+        <strong>DISCOVERY & IDENTITY:</strong><br/>
+        matchedSelector: <code>${escapeHtml(state.matchedSelector || "N/A")}</code><br/>
+        tag: <code>${escapeHtml(state.tagName || "DIV")}</code> | id: <code>${escapeHtml(state.idAttribute || "none")}</code> | class: <code>${escapeHtml(state.className || "none")}</code><br/>
+        data-lazy-mount-id: <code>${escapeHtml(state.lazyMountId || "none")}</code> | data-urn: <code>${escapeHtml(state.dataUrn || "none")}</code><br/>
+        parent: <code>${escapeHtml(state.parentTag || "none")}.${escapeHtml(state.parentClass || "none")}</code> | feedRoot: <code>${escapeHtml(state.feedRootIdentity || "none")}</code>
       </div>
       ${state.error ? `<div style="color:#b91c1c; margin-top:4px; font-weight:bold;">Error: ${escapeHtml(state.error)}</div>` : ""}
     `;
@@ -451,7 +633,7 @@
             reason: state.reason
           },
           extraction: {
-            ok: state.author !== "Unknown" || state.postId !== "unknown",
+            ok: state.author !== "Unknown" || (state.postId && state.postId !== "unknown"),
             author: state.author,
             textSnippet: state.textSnippet
           },
@@ -466,6 +648,8 @@
             reason: state.reason,
             provider: state.provider,
             model: state.model,
+            isCustomEndpoint: state.isCustomEndpoint,
+            providerFormatted: formatProviderInfo(state),
             error: state.error
           },
           domState: {
@@ -474,6 +658,24 @@
             computedDisplay: state.computedDisplay ?? (typeof getComputedStyle === "function" ? getComputedStyle(el).display : null),
             verified: state.domVerified,
             status: state.domState
+          },
+          discovery: {
+            matchedSelector: state.matchedSelector,
+            tagName: state.tagName,
+            className: state.className,
+            idAttribute: state.idAttribute,
+            lazyMountId: state.lazyMountId,
+            dataUrn: state.dataUrn,
+            dataId: state.dataId,
+            parentTag: state.parentTag,
+            parentClass: state.parentClass,
+            feedRootIdentity: state.feedRootIdentity,
+            signals: state.qualificationSignals,
+            rejectionReason: state.rejectionReason
+          },
+          positioning: {
+            state: state.positionState,
+            error: state.positionError
           },
           terminal: state.terminal,
           element: el
@@ -1516,6 +1718,28 @@
     return { id, text, author, authorUrl, postUrl, el };
   }
   
+  function getMatchedSelector(node) {
+    if (!node || typeof node.matches !== "function") return "unknown";
+    const selectors = [
+      "div[data-lazy-mount-id]",
+      "div.feed-shared-update-v2",
+      "div.occludable-update",
+      "div[data-urn*='activity:']",
+      "div[data-urn*='ugcPost:']",
+      "div[data-urn*='sponsoredUpdate:']",
+      "div[data-id*='activity:']",
+      'div[data-testid="mainFeed"] div[role="listitem"]',
+      'div[role="listitem"]',
+      'div[role="list"] > div',
+    ];
+    for (const s of selectors) {
+      try {
+        if (node.matches(s)) return s;
+      } catch {}
+    }
+    return "custom-candidate";
+  }
+  
   /**
    * Finds candidate container elements with deduplication favoring canonical inner update nodes.
    * Optimized with fast-path return when root is already a resolved post container.
@@ -1583,11 +1807,14 @@
   
     logger.trace("CONTAINERS_FOUND", `count=${filteredNodes.length}`);
     if (isDiagnosticModeEnabled()) {
+      const feedRootId = root ? `${root.tagName || "ROOT"}${root.id ? "#" + root.id : ""}${root.className && typeof root.className === "string" ? "." + root.className.split(/\s+/).slice(0, 2).join(".") : ""}` : "UNKNOWN";
       for (const node of filteredNodes) {
         updateDiagnosticOverlay(node, {
           stage: "DISCOVERED",
           terminal: "DISCOVERED",
           postId: node.getAttribute("data-lazy-mount-id") || node.getAttribute("data-urn") || "unknown",
+          matchedSelector: getMatchedSelector(node),
+          feedRootIdentity: feedRootId,
         });
       }
     }
@@ -1846,6 +2073,7 @@
                 reason: decision.reason,
                 provider: response?.provider || "",
                 model: response?.model || "",
+                isCustomEndpoint: response?.isCustomEndpoint === true,
                 error: decision.error || "",
               });
   
@@ -1954,6 +2182,12 @@
   
       logger.trace("QUALIFICATION", `decision=${qual.decision} score=${qual.score} reason=${qual.reason}`);
   
+      const sigs = qual.signals || {};
+      const signalsSummary = Object.entries(sigs)
+        .filter(([_, v]) => v)
+        .map(([k]) => k)
+        .join(", ") || "none";
+  
       updateDiagnosticOverlay(node, {
         stage: "QUALIFIED",
         terminal: qual.qualified
@@ -1964,6 +2198,8 @@
         qualified: qual.qualified,
         score: qual.score,
         reason: qual.reason,
+        qualificationSignals: `${signalsSummary} (Score: ${qual.score})`,
+        rejectionReason: qual.qualified ? "" : qual.reason,
       });
   
       if (isDebugEnabled()) {

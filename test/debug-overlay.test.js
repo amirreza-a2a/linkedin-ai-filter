@@ -6,7 +6,8 @@ import {
   isDiagnosticModeEnabled, 
   getDiagnosticStatus, 
   getAllDiagnosticStates,
-  updateAllBadgePositions 
+  updateAllBadgePositions,
+  formatProviderInfo
 } from "../src/content/debug-overlay.js";
 
 function createMockElement(tag = "DIV", attrs = {}) {
@@ -287,6 +288,80 @@ test("6. API Gateway Lifecycle: API_TIMEOUT, API_SUCCESS_HIDE, API_SUCCESS_SHOW"
       reason: "Neutral career post"
     });
     assert.equal(elSuccessShow.getAttribute("data-feedrule-terminal"), "API_SUCCESS_SHOW");
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+test("7. Provider Formatting: Explicit provider states and no invalid 'Local' fallback", () => {
+  assert.equal(formatProviderInfo({ provider: "gemini", model: "gemini-2.5-flash" }), "Gemini (gemini-2.5-flash)");
+  assert.equal(formatProviderInfo({ provider: "openai", model: "gpt-4o-mini" }), "OpenAI (gpt-4o-mini)");
+  assert.equal(formatProviderInfo({ provider: "claude", model: "claude-3-5-sonnet" }), "Anthropic (claude-3-5-sonnet)");
+  assert.equal(formatProviderInfo({ isCustomEndpoint: true }), "Local / Custom");
+  assert.equal(formatProviderInfo({ provider: "openai", model: "llama-3", isCustomEndpoint: true }), "OpenAI (llama-3) [Local / Custom]");
+  assert.equal(formatProviderInfo({}), "Provider: UNKNOWN");
+  assert.equal(formatProviderInfo({ provider: "" }), "Provider: UNKNOWN");
+});
+
+test("8. Badge Positioning: Zero-dimension or unmounted element fails positioning gracefully without placing at origin", () => {
+  const { doc, body } = setupMockDOM();
+
+  try {
+    const zeroDimEl = createMockElement("DIV", { "data-lazy-mount-id": "zero_dim_post" });
+    // Simulate zero dimensions (e.g. unrendered or off-DOM)
+    zeroDimEl.getBoundingClientRect = () => ({ top: 0, left: 0, width: 0, height: 0, bottom: 0, right: 0 });
+    body.appendChild(zeroDimEl);
+
+    updateDiagnosticOverlay(zeroDimEl, {
+      stage: "DISCOVERED",
+      terminal: "DISCOVERED"
+    });
+
+    const layer = doc.getElementById("feedrule-diagnostic-layer");
+    const badge = layer.querySelector('[data-feedrule-target-id="zero_dim_post"]');
+    assert.ok(badge);
+    assert.equal(badge.style.display, "none", "Zero dimension element badge is hidden");
+
+    const states = getAllDiagnosticStates();
+    const zeroState = states.find(s => s.postId === "zero_dim_post");
+    assert.ok(zeroState);
+    assert.equal(zeroState.positioning.state, "POSITION_FAILED");
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+test("9. Candidate Discovery: Captures matchedSelector, feedRootIdentity, and qualification signals", () => {
+  const { doc, body } = setupMockDOM();
+
+  try {
+    const candidateEl = createMockElement("DIV", { 
+      "data-lazy-mount-id": "unknown", 
+      class: "scaffold-finite-scroll__load-button" 
+    });
+    body.appendChild(candidateEl);
+
+    updateDiagnosticOverlay(candidateEl, {
+      stage: "QUALIFIED",
+      terminal: "REJECTED_NOT_POST",
+      qualified: false,
+      score: 0,
+      reason: "insufficient-signals",
+      matchedSelector: "div[data-lazy-mount-id]",
+      feedRootIdentity: "MAIN#workspace",
+      qualificationSignals: "none (Score: 0)",
+      rejectionReason: "insufficient-signals"
+    });
+
+    const states = getAllDiagnosticStates();
+    const candidateState = states.find(s => s.postId === "unknown");
+    assert.ok(candidateState);
+    assert.equal(candidateState.qualification.decision, "REJECT");
+    assert.equal(candidateState.discovery.matchedSelector, "div[data-lazy-mount-id]");
+    assert.equal(candidateState.discovery.feedRootIdentity, "MAIN#workspace");
+    assert.equal(candidateState.discovery.rejectionReason, "insufficient-signals");
   } finally {
     delete globalThis.document;
     delete globalThis.window;

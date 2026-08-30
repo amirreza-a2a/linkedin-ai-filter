@@ -26,9 +26,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "CLASSIFY_POSTS": {
       const posts = Array.isArray(message.posts) ? message.posts : [];
       handleClassify(posts)
-        .then((results) => {
+        .then((data) => {
           try {
-            sendResponse({ ok: true, results });
+            const results = Array.isArray(data) ? data : (data.results || []);
+            const provider = data.provider || "";
+            const model = data.model || "";
+            const isCustomEndpoint = Boolean(data.isCustomEndpoint);
+            sendResponse({ ok: true, results, provider, model, isCustomEndpoint });
           } catch (err) {
             logger.warn("SW", "sendResponse failed:", err);
           }
@@ -39,6 +43,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({
               ok: false,
               error: String(err),
+              provider: "",
+              model: "",
+              isCustomEndpoint: false,
               results: posts.map((p) => ({
                 id: p.id,
                 hide: false,
@@ -149,7 +156,7 @@ async function handleClassify(posts) {
       autoSaved: false,
     }));
     await logResults(posts, results, provider, model, rulesText);
-    return results;
+    return { results, provider, model, isCustomEndpoint: Boolean(baseUrl) };
   }
 
   // Check cache first in a single batch read using isolated cache keys
@@ -292,5 +299,5 @@ async function handleClassify(posts) {
   }
 
   await logResults(posts, results, provider, model, rulesText);
-  return results;
+  return { results, provider, model, isCustomEndpoint: Boolean(baseUrl) };
 }
